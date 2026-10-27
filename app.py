@@ -1,5 +1,6 @@
 import streamlit as st
 import plotly.graph_objects as go
+import math
 from thermal_model import calculate_thermal_state
 from ai_model import predict_next_load
 
@@ -697,6 +698,83 @@ add_box(-5.55,-4.15,-3.72,-2.38,1.05,1.12,"#DDE9F5","Monitoring panel screen")
 add_label(-4.85,-3.05,1.42,"MONITOR",size=9)
 
 
+
+# ---------- Animated current-flow particles ----------
+# Glowing moving markers illustrate simulated current flow; they are not a physical field model.
+flow_paths = []
+for tr in transformers:
+    x, y = tr["x"], tr["y"]
+    for j, (phase, color, current) in enumerate(phase_data):
+        yy = y - 0.38 + j * 0.38
+        z = 1.55 - j * 0.08
+        path = [
+            (x + 1.42, yy, z),
+            (x + 2.00, yy, z),
+            (x + 2.55, yy, z + 0.15),
+            (x + 3.25, yy, z + 0.15),
+            (x + 4.00, yy, z),
+            (tr["loadx"] - 0.35, tr["loady"] + (j - 1) * 0.34, 0.75),
+        ]
+        flow_paths.append((phase, color, float(current), path, tr["name"]))
+
+def point_along_path(path, fraction):
+    lengths = []
+    total = 0.0
+    for a, b in zip(path[:-1], path[1:]):
+        length = math.sqrt(sum((b[k] - a[k]) ** 2 for k in range(3)))
+        lengths.append(length)
+        total += length
+    if total == 0:
+        return path[0]
+    target = (fraction % 1.0) * total
+    walked = 0.0
+    for idx, length in enumerate(lengths):
+        if walked + length >= target:
+            ratio = (target - walked) / length if length else 0.0
+            a, b = path[idx], path[idx + 1]
+            return tuple(a[k] + (b[k] - a[k]) * ratio for k in range(3))
+        walked += length
+    return path[-1]
+
+particle_trace_indices = []
+particle_count = 4
+frame_count = 32
+for phase, color, current, path, transformer_name in flow_paths:
+    initial_points = [point_along_path(path, pidx / particle_count) for pidx in range(particle_count)]
+    particle_trace_indices.append(len(fig.data))
+    fig.add_trace(go.Scatter3d(
+        x=[pt[0] for pt in initial_points],
+        y=[pt[1] for pt in initial_points],
+        z=[pt[2] for pt in initial_points],
+        mode="markers",
+        marker=dict(
+            size=[max(2, min(7, 2.5 + current / 35))] * particle_count,
+            color=color, opacity=0.98,
+            line=dict(color="#FFFFFF", width=1),
+        ),
+        name=f"{transformer_name} {phase} current flow",
+        showlegend=False,
+        hovertemplate=f"<b>{transformer_name} · Phase {phase}</b><br>Simulated current: {current:.1f} A<extra></extra>",
+    ))
+
+animation_frames = []
+for frame_idx in range(frame_count):
+    frame_data = []
+    for phase, color, current, path, transformer_name in flow_paths:
+        speed = 0.12 + (max(0.0, current) / 200.0) * 0.35
+        points = [
+            point_along_path(path, pidx / particle_count + frame_idx * speed / frame_count)
+            for pidx in range(particle_count)
+        ]
+        frame_data.append(go.Scatter3d(
+            x=[pt[0] for pt in points],
+            y=[pt[1] for pt in points],
+            z=[pt[2] for pt in points],
+        ))
+    animation_frames.append(go.Frame(name=str(frame_idx), data=frame_data, traces=particle_trace_indices))
+
+fig.frames = animation_frames
+
 # ---------- Plot styling ----------
 fig.update_layout(
     height=800,
@@ -705,6 +783,19 @@ fig.update_layout(
     plot_bgcolor="#F8FAFC",
     font=dict(family="Arial", color="#243247", size=11),
     showlegend=False,
+    updatemenus=[dict(
+        type="buttons", showactive=False, x=0.02, y=0.02,
+        xanchor="left", yanchor="bottom",
+        buttons=[
+            dict(label="▶ Play Current Flow", method="animate",
+                 args=[None, dict(frame=dict(duration=90, redraw=True),
+                                  transition=dict(duration=0), fromcurrent=True,
+                                  mode="immediate")]),
+            dict(label="Ⅱ Pause", method="animate",
+                 args=[[None], dict(frame=dict(duration=0, redraw=False),
+                                    transition=dict(duration=0), mode="immediate")]),
+        ],
+    )],
     scene=dict(
         bgcolor="#F8FAFC",
         xaxis=dict(visible=False, range=[-7, 8], showbackground=False),

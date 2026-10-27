@@ -700,7 +700,8 @@ add_label(-4.85,-3.05,1.42,"MONITOR",size=9)
 
 
 # ---------- Animated current-flow particles ----------
-# Glowing moving markers illustrate simulated current flow; they are not a physical field model.
+# Visual particles illustrate simulated current direction from each transformer
+# feeder toward its load bank. This is an illustrative software animation.
 flow_paths = []
 for tr in transformers:
     x, y = tr["x"], tr["y"]
@@ -724,7 +725,7 @@ def point_along_path(path, fraction):
         length = math.sqrt(sum((b[k] - a[k]) ** 2 for k in range(3)))
         lengths.append(length)
         total += length
-    if total == 0:
+    if total <= 0:
         return path[0]
     target = (fraction % 1.0) * total
     walked = 0.0
@@ -736,40 +737,56 @@ def point_along_path(path, fraction):
         walked += length
     return path[-1]
 
+# Two marker layers per phase: a soft halo and a bright core make the motion
+# easier to see against the feeder wires.
 particle_trace_indices = []
-particle_count = 4
-frame_count = 32
+particle_count = 5
+frame_count = 48
 for phase, color, current, path, transformer_name in flow_paths:
     initial_points = [point_along_path(path, pidx / particle_count) for pidx in range(particle_count)]
-    particle_trace_indices.append(len(fig.data))
+    halo_idx = len(fig.data)
+    particle_trace_indices.extend([halo_idx, halo_idx + 1])
+    halo_size = max(15, min(23, 14 + current / 25))
+    core_size = max(6, min(10, 5 + current / 40))
     fig.add_trace(go.Scatter3d(
         x=[pt[0] for pt in initial_points],
         y=[pt[1] for pt in initial_points],
-        z=[pt[2] for pt in initial_points],
+        z=[pt[2] + 0.025 for pt in initial_points],
         mode="markers",
-        marker=dict(
-            size=[max(2, min(7, 2.5 + current / 35))] * particle_count,
-            color=color, opacity=0.98,
-            line=dict(color="#FFFFFF", width=1),
-        ),
+        marker=dict(size=halo_size, color=color, opacity=0.22, line=dict(width=0)),
+        name=f"{transformer_name} {phase} flow glow",
+        showlegend=False, hoverinfo="skip",
+    ))
+    fig.add_trace(go.Scatter3d(
+        x=[pt[0] for pt in initial_points],
+        y=[pt[1] for pt in initial_points],
+        z=[pt[2] + 0.035 for pt in initial_points],
+        mode="markers",
+        marker=dict(size=core_size, color=color, opacity=1.0,
+                    line=dict(color="#FFFFFF", width=1.8)),
         name=f"{transformer_name} {phase} current flow",
         showlegend=False,
-        hovertemplate=f"<b>{transformer_name} · Phase {phase}</b><br>Simulated current: {current:.1f} A<extra></extra>",
+        hovertemplate=f"<b>{transformer_name} · Phase {phase}</b><br>Simulated current: {current:.1f} A<br>Direction: transformer → load bank<extra></extra>",
     ))
 
 animation_frames = []
 for frame_idx in range(frame_count):
     frame_data = []
     for phase, color, current, path, transformer_name in flow_paths:
-        speed = 0.12 + (max(0.0, current) / 200.0) * 0.35
+        # Faster current gives a slightly faster particle flow in this demo.
+        speed = 0.55 + (max(0.0, current) / 200.0) * 0.9
         points = [
             point_along_path(path, pidx / particle_count + frame_idx * speed / frame_count)
             for pidx in range(particle_count)
         ]
+        # Both layers receive identical coordinates to preserve the glow effect.
         frame_data.append(go.Scatter3d(
-            x=[pt[0] for pt in points],
-            y=[pt[1] for pt in points],
-            z=[pt[2] for pt in points],
+            x=[pt[0] for pt in points], y=[pt[1] for pt in points],
+            z=[pt[2] + 0.025 for pt in points],
+        ))
+        frame_data.append(go.Scatter3d(
+            x=[pt[0] for pt in points], y=[pt[1] for pt in points],
+            z=[pt[2] + 0.035 for pt in points],
         ))
     animation_frames.append(go.Frame(name=str(frame_idx), data=frame_data, traces=particle_trace_indices))
 
@@ -777,8 +794,8 @@ fig.frames = animation_frames
 
 # ---------- Plot styling ----------
 fig.update_layout(
-    height=800,
-    margin=dict(l=0, r=0, t=20, b=0),
+    height=820,
+    margin=dict(l=0, r=0, t=20, b=80),
     paper_bgcolor="#F8FAFC",
     plot_bgcolor="#F8FAFC",
     font=dict(family="Arial", color="#243247", size=11),
@@ -787,38 +804,32 @@ fig.update_layout(
         type="buttons",
         direction="right",
         showactive=False,
-        x=0.02, y=0.02,
-        xanchor="left", yanchor="bottom",
-        bgcolor="#0F172A",
-        bordercolor="#334155",
-        borderwidth=1,
-        font=dict(color="#F8FAFC", size=12),
-        pad=dict(r=10, t=8),
+        x=0.50, y=-0.02,
+        xanchor="center", yanchor="top",
+        bgcolor="#14213D",
+        bordercolor="#38BDF8",
+        borderwidth=1.5,
+        font=dict(color="#FFFFFF", size=13, family="Arial"),
+        pad=dict(l=12, r=12, t=10, b=10),
         buttons=[
             dict(
                 label="▶  PLAY CURRENT FLOW",
                 method="animate",
-                args=[
-                    None,
-                    dict(
-                        frame=dict(duration=100, redraw=True),
-                        transition=dict(duration=0),
-                        fromcurrent=True,
-                        mode="immediate",
-                    ),
-                ],
+                args=[None, dict(
+                    frame=dict(duration=75, redraw=True),
+                    transition=dict(duration=0),
+                    fromcurrent=True,
+                    mode="immediate",
+                )],
             ),
             dict(
-                label="Ⅱ  PAUSE FLOW",
+                label="Ⅱ  PAUSE",
                 method="animate",
-                args=[
-                    [None],
-                    dict(
-                        frame=dict(duration=0, redraw=False),
-                        transition=dict(duration=0),
-                        mode="immediate",
-                    ),
-                ],
+                args=[[None], dict(
+                    frame=dict(duration=0, redraw=True),
+                    transition=dict(duration=0),
+                    mode="immediate",
+                )],
             ),
         ],
     )],
@@ -835,7 +846,7 @@ fig.update_layout(
 )
 
 st.subheader("Interactive 3D Substation Model")
-st.caption("Drag to rotate • Scroll to zoom • Hover over equipment for details • Change simulated readings in the sidebar")
+st.caption("Current-flow animation: click ▶ PLAY CURRENT FLOW below the 3D model; click Ⅱ PAUSE to stop. Bright moving particles show simulated flow from each transformer to its load bank. Drag to rotate • Scroll to zoom.")
 st.plotly_chart(
     fig,
     width="stretch",

@@ -741,13 +741,13 @@ def point_along_path(path, fraction):
 # easier to see against the feeder wires.
 particle_trace_indices = []
 particle_count = 5
-frame_count = 48
+frame_count = 120
 for phase, color, current, path, transformer_name in flow_paths:
     initial_points = [point_along_path(path, pidx / particle_count) for pidx in range(particle_count)]
     halo_idx = len(fig.data)
     particle_trace_indices.extend([halo_idx, halo_idx + 1])
-    halo_size = max(15, min(23, 14 + current / 25))
-    core_size = max(6, min(10, 5 + current / 40))
+    halo_size = max(8, min(12, 7 + current / 45))
+    core_size = max(3, min(4.5, 2.5 + current / 100))
     fig.add_trace(go.Scatter3d(
         x=[pt[0] for pt in initial_points],
         y=[pt[1] for pt in initial_points],
@@ -763,7 +763,7 @@ for phase, color, current, path, transformer_name in flow_paths:
         z=[pt[2] + 0.035 for pt in initial_points],
         mode="markers",
         marker=dict(size=core_size, color=color, opacity=1.0,
-                    line=dict(color="#FFFFFF", width=1.8)),
+                    line=dict(color="#FFFFFF", width=0.7)),
         name=f"{transformer_name} {phase} current flow",
         showlegend=False,
         hovertemplate=f"<b>{transformer_name} · Phase {phase}</b><br>Simulated current: {current:.1f} A<br>Direction: transformer → load bank<extra></extra>",
@@ -795,44 +795,11 @@ fig.frames = animation_frames
 # ---------- Plot styling ----------
 fig.update_layout(
     height=820,
-    margin=dict(l=0, r=0, t=20, b=80),
+    margin=dict(l=0, r=0, t=20, b=20),
     paper_bgcolor="#F8FAFC",
     plot_bgcolor="#F8FAFC",
     font=dict(family="Arial", color="#243247", size=11),
     showlegend=False,
-    updatemenus=[dict(
-        type="buttons",
-        direction="right",
-        showactive=False,
-        x=0.50, y=-0.02,
-        xanchor="center", yanchor="top",
-        bgcolor="#14213D",
-        bordercolor="#38BDF8",
-        borderwidth=1.5,
-        font=dict(color="#FFFFFF", size=13, family="Arial"),
-        pad=dict(l=12, r=12, t=10, b=10),
-        buttons=[
-            dict(
-                label="▶  PLAY CURRENT FLOW",
-                method="animate",
-                args=[None, dict(
-                    frame=dict(duration=75, redraw=True),
-                    transition=dict(duration=0),
-                    fromcurrent=True,
-                    mode="immediate",
-                )],
-            ),
-            dict(
-                label="Ⅱ  PAUSE",
-                method="animate",
-                args=[[None], dict(
-                    frame=dict(duration=0, redraw=True),
-                    transition=dict(duration=0),
-                    mode="immediate",
-                )],
-            ),
-        ],
-    )],
     scene=dict(
         bgcolor="#F8FAFC",
         xaxis=dict(visible=False, range=[-7, 8], showbackground=False),
@@ -846,11 +813,78 @@ fig.update_layout(
 )
 
 st.subheader("Interactive 3D Substation Model")
-st.caption("Current-flow animation: click ▶ PLAY CURRENT FLOW below the 3D model; click Ⅱ PAUSE to stop. Bright moving particles show simulated flow from each transformer to its load bank. Drag to rotate • Scroll to zoom.")
-st.plotly_chart(
-    fig,
-    width="stretch",
-    config={"displaylogo": False, "scrollZoom": True}
+st.caption("Current-flow animation: press PLAY to keep particles moving continuously; press PAUSE to stop them. Smaller glowing particles show simulated flow from transformer to load bank. Drag to rotate • Scroll to zoom.")
+
+# Render Plotly in an HTML component so JavaScript can keep cycling through
+# animation frames until the user explicitly presses Pause. Native Plotly
+# animation buttons only play the finite frame sequence once.
+plot_id = "gridtwin-current-flow-plot"
+post_script = r"""
+const gd = document.getElementById('{plot_id}');
+let frameIndex = 0;
+let isPlaying = false;
+let timerId = null;
+const totalFrames = 120;
+function playCurrentFlow() {
+  if (isPlaying) return;
+  isPlaying = true;
+  const playBtn = document.getElementById('gt-play');
+  const pauseBtn = document.getElementById('gt-pause');
+  playBtn.classList.add('active');
+  pauseBtn.classList.remove('active');
+  const step = () => {
+    if (!isPlaying) return;
+    Plotly.animate(gd, [String(frameIndex)], {
+      mode: 'immediate',
+      frame: {duration: 45, redraw: true},
+      transition: {duration: 0}
+    }).then(() => {
+      frameIndex = (frameIndex + 1) % totalFrames;
+      if (isPlaying) timerId = setTimeout(step, 0);
+    }).catch(() => { if (isPlaying) timerId = setTimeout(step, 50); });
+  };
+  step();
+}
+function pauseCurrentFlow() {
+  isPlaying = false;
+  if (timerId !== null) clearTimeout(timerId);
+  const playBtn = document.getElementById('gt-play');
+  const pauseBtn = document.getElementById('gt-pause');
+  playBtn.classList.remove('active');
+  pauseBtn.classList.add('active');
+  Plotly.animate(gd, [], {mode: 'immediate', frame: {duration: 0, redraw: false}, transition: {duration: 0}});
+}
+document.getElementById('gt-play').addEventListener('click', playCurrentFlow);
+document.getElementById('gt-pause').addEventListener('click', pauseCurrentFlow);
+"""
+plot_html = fig.to_html(
+    full_html=False,
+    include_plotlyjs="cdn",
+    config={"displaylogo": False, "scrollZoom": True, "responsive": True},
+    div_id=plot_id,
+    post_script=post_script,
+)
+controls_html = r"""
+<div class="gt-controls">
+  <button id="gt-play" class="gt-button gt-play" type="button">▶ &nbsp; PLAY CURRENT FLOW</button>
+  <button id="gt-pause" class="gt-button gt-pause active" type="button">Ⅱ &nbsp; PAUSE</button>
+  <span class="gt-status"><span class="gt-dot"></span> SIMULATED CURRENT FLOW</span>
+</div>
+<style>
+  .gt-controls { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:12px; padding:14px 10px; font-family:Arial,sans-serif; background:#f8fafc; border-radius:14px 14px 0 0; }
+  .gt-button { border:1px solid #cbd5e1; border-radius:10px; padding:12px 18px; font-size:13px; font-weight:700; letter-spacing:.3px; cursor:pointer; transition:all .18s ease; box-shadow:0 2px 5px rgba(15,23,42,.08); }
+  .gt-play { color:#fff; background:linear-gradient(135deg,#0f766e,#0891b2); border-color:#0e7490; }
+  .gt-pause { color:#334155; background:#fff; }
+  .gt-button:hover { transform:translateY(-1px); box-shadow:0 4px 10px rgba(15,23,42,.15); }
+  .gt-button.active { outline:2px solid #7dd3fc; outline-offset:2px; }
+  .gt-status { display:flex; align-items:center; gap:7px; font-size:10px; font-weight:700; color:#64748b; letter-spacing:.8px; }
+  .gt-dot { width:8px; height:8px; border-radius:50%; background:#10b981; box-shadow:0 0 0 4px #d1fae5; }
+</style>
+"""
+st.components.v1.html(
+    f"<!doctype html><html><head><meta charset='utf-8'></head><body style='margin:0;background:#f8fafc'>{controls_html}{plot_html}</body></html>",
+    height=850,
+    scrolling=False,
 )
 # ---------- Monitoring panels ----------
 st.divider()

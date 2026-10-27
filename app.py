@@ -784,16 +784,42 @@ fig.update_layout(
     font=dict(family="Arial", color="#243247", size=11),
     showlegend=False,
     updatemenus=[dict(
-        type="buttons", showactive=False, x=0.02, y=0.02,
+        type="buttons",
+        direction="right",
+        showactive=False,
+        x=0.02, y=0.02,
         xanchor="left", yanchor="bottom",
+        bgcolor="#0F172A",
+        bordercolor="#334155",
+        borderwidth=1,
+        font=dict(color="#F8FAFC", size=12),
+        pad=dict(r=10, t=8),
         buttons=[
-            dict(label="▶ Play Current Flow", method="animate",
-                 args=[None, dict(frame=dict(duration=90, redraw=True),
-                                  transition=dict(duration=0), fromcurrent=True,
-                                  mode="immediate")]),
-            dict(label="Ⅱ Pause", method="animate",
-                 args=[[None], dict(frame=dict(duration=0, redraw=False),
-                                    transition=dict(duration=0), mode="immediate")]),
+            dict(
+                label="▶  PLAY CURRENT FLOW",
+                method="animate",
+                args=[
+                    None,
+                    dict(
+                        frame=dict(duration=100, redraw=True),
+                        transition=dict(duration=0),
+                        fromcurrent=True,
+                        mode="immediate",
+                    ),
+                ],
+            ),
+            dict(
+                label="Ⅱ  PAUSE FLOW",
+                method="animate",
+                args=[
+                    [None],
+                    dict(
+                        frame=dict(duration=0, redraw=False),
+                        transition=dict(duration=0),
+                        mode="immediate",
+                    ),
+                ],
+            ),
         ],
     )],
     scene=dict(

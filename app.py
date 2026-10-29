@@ -373,29 +373,93 @@ st.caption(
     f"Destination current before transfer: {current_snapshot[destination_phase]:.1f} A"
 )
 
-if st.button("⚡ TRANSFER LOAD", type="primary", width="stretch"):
+
+def transfer_load():
+    source_phase = st.session_state.transfer_source
+    destination_phase = st.session_state.transfer_destination
+    transfer_amount = float(st.session_state.transfer_amount)
+
+    phase_keys = {
+        "R": "current_r",
+        "Y": "current_y",
+        "B": "current_b",
+    }
+
     source_now = float(st.session_state[phase_keys[source_phase]])
     destination_now = float(st.session_state[phase_keys[destination_phase]])
+
     if transfer_amount <= 0:
-        st.error("Enter a transfer amount greater than zero.")
-    elif transfer_amount > source_now:
-        st.error(f"Transfer rejected: phase {source_phase} only has {source_now:.1f} A available.")
-    elif destination_now + transfer_amount > 200:
-        st.error("Transfer rejected: destination would exceed the demo slider limit of 200 A.")
-    else:
-        transfer_amount = float(round(transfer_amount))
-        st.session_state[phase_keys[source_phase]] = int(round(source_now - transfer_amount))
-        st.session_state[phase_keys[destination_phase]] = int(round(destination_now + transfer_amount))
-        st.session_state.last_transfer = {
-            "source": source_phase,
-            "destination": destination_phase,
-            "amount": transfer_amount,
-            "source_before": source_now,
-            "destination_before": destination_now,
-            "source_after": source_now - transfer_amount,
-            "destination_after": destination_now + transfer_amount,
-        }
-        st.rerun()
+        st.session_state.transfer_error = "Enter a transfer amount greater than zero."
+        return
+
+    if destination_now + transfer_amount > 200:
+        st.session_state.transfer_error = (
+            "Destination would exceed the 200 A limit."
+        )
+        return
+
+    transfer_amount = float(round(transfer_amount))
+
+    st.session_state[phase_keys[source_phase]] = int(
+        round(source_now - transfer_amount)
+    )
+    st.session_state[phase_keys[destination_phase]] = int(
+        round(destination_now + transfer_amount)
+    )
+
+    st.session_state.last_transfer = {
+        "source": source_phase,
+        "destination": destination_phase,
+        "amount": transfer_amount,
+        "source_before": source_now,
+        "destination_before": destination_now,
+        "source_after": source_now - transfer_amount,
+        "destination_after": destination_now + transfer_amount,
+    }
+
+    st.session_state.transfer_error = ""
+st.button(
+    "⚡ TRANSFER LOAD",
+    type="primary",
+    width="stretch",
+    on_click=transfer_load,
+)
+
+if st.session_state.get("transfer_error"):
+    st.error(st.session_state.transfer_error)
+    if transfer_amount > source_now:
+        st.session_state.transfer_error = (
+            f"Phase {source_phase} only has {source_now:.1f} A available."
+        )
+        return
+
+    if destination_now + transfer_amount > 200:
+        st.session_state.transfer_error = (
+            "Destination would exceed the 200 A limit."
+        )
+        return
+
+    transfer_amount = float(round(transfer_amount))
+
+    st.session_state[phase_keys[source_phase]] = int(
+        round(source_now - transfer_amount)
+    )
+    st.session_state[phase_keys[destination_phase]] = int(
+        round(destination_now + transfer_amount)
+    )
+
+    st.session_state.last_transfer = {
+        "source": source_phase,
+        "destination": destination_phase,
+        "amount": transfer_amount,
+        "source_before": source_now,
+        "destination_before": destination_now,
+        "source_after": source_now - transfer_amount,
+        "destination_after": destination_now + transfer_amount,
+    }
+
+    st.session_state.transfer_error = ""
+
 
 if "last_transfer" in st.session_state:
     event = st.session_state.last_transfer

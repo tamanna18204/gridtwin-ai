@@ -35,9 +35,14 @@ st.info(
 st.sidebar.header("Simulated Sensor Inputs")
 st.sidebar.caption("Change the values to update the monitoring view.")
 
-current_r = st.sidebar.slider("Phase R current (A)", 0, 200, 85)
-current_y = st.sidebar.slider("Phase Y current (A)", 0, 200, 60)
-current_b = st.sidebar.slider("Phase B current (A)", 0, 200, 40)
+# Store phase currents in session state so a transfer persists across reruns.
+for key, default in (("current_r", 85), ("current_y", 60), ("current_b", 40)):
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+current_r = st.sidebar.slider("Phase R current (A)", 0, 200, key="current_r")
+current_y = st.sidebar.slider("Phase Y current (A)", 0, 200, key="current_y")
+current_b = st.sidebar.slider("Phase B current (A)", 0, 200, key="current_b")
 ambient_temp = st.sidebar.slider("Ambient temperature (°C)", -10, 60, 30)
 show_labels = st.sidebar.checkbox("Show equipment labels", value=True)
 show_grid = st.sidebar.checkbox("Show ground grid", value=False)
@@ -336,144 +341,144 @@ st.caption(
     "require engineering validation."
 )
 
-# ---------- LOAD TRANSFER SIMULATION ----------
-st.header("🔀 Load Transfer Simulation")
-
+# ---------- INTERACTIVE LOAD TRANSFER SIMULATION ----------
+st.header("🔀 Interactive Load Transfer")
 st.caption(
-    "Simulation only — no physical feeder or switch is controlled."
+    "Choose a source and destination phase, then transfer a selected amount. "
+    "This is a software simulation only; it does not operate physical switchgear."
 )
 
-# Demo settings; replace with validated feeder ratings for real studies.
-standby_capacity = st.number_input(
-    "Standby feeder available capacity (A)",
+phase_keys = {"R": "current_r", "Y": "current_y", "B": "current_b"}
+current_snapshot = {
+    "R": float(st.session_state.current_r),
+    "Y": float(st.session_state.current_y),
+    "B": float(st.session_state.current_b),
+}
+source_phase = st.selectbox("Transfer load FROM phase", ["R", "Y", "B"], index=0, key="transfer_source")
+destination_options = [p for p in ["R", "Y", "B"] if p != source_phase]
+destination_phase = st.selectbox(
+    "Transfer load TO phase", destination_options, key="transfer_destination"
+)
+available_source = current_snapshot[source_phase]
+transfer_amount = st.number_input(
+    "Load to transfer (A)",
     min_value=0.0,
-    max_value=10000.0,
-    value=50.0,
-    step=5.0
+    max_value=float(max(available_source, 0.0)),
+    value=float(min(10.0, available_source)),
+    step=1.0,
+    key="transfer_amount",
+)
+st.caption(
+    f"Available source current: {available_source:.1f} A · "
+    f"Destination current before transfer: {current_snapshot[destination_phase]:.1f} A"
 )
 
-proposed_transfer = st.number_input(
-    "Proposed load to transfer (A)",
-    min_value=0.0,
-    max_value=10000.0,
-    value=10.0,
-    step=1.0
-)
-
-
-primary_before = float(monitored_current)
-primary_after = max(0.0, primary_before - proposed_transfer)
-
-# Recalculate the illustrative thermal state after transfer.
-thermal_after = calculate_thermal_state(
-    current=primary_after,
-    ambient_temp=ambient_temp
-)
-
-st.subheader("Transfer Decision")
-
-if thermal["status"] == "NORMAL":
-    st.info(
-        "Primary feeder is in NORMAL thermal state. "
-        "Continue monitoring; no transfer is currently recommended."
-    )
-
-elif thermal["status"] == "WARNING / TRANSFER":
-    if proposed_transfer <= 0:
-        st.warning("Enter a transfer amount greater than zero.")
-
-    elif proposed_transfer > standby_capacity:
-        st.error(
-            "Transfer rejected in simulation: proposed transfer "
-            "exceeds the standby feeder's available capacity."
-        )
-
+if st.button("⚡ TRANSFER LOAD", type="primary", use_container_width=True):
+    source_now = float(st.session_state[phase_keys[source_phase]])
+    destination_now = float(st.session_state[phase_keys[destination_phase]])
+    if transfer_amount <= 0:
+        st.error("Enter a transfer amount greater than zero.")
+    elif transfer_amount > source_now:
+        st.error(f"Transfer rejected: phase {source_phase} only has {source_now:.1f} A available.")
+    elif destination_now + transfer_amount > 200:
+        st.error("Transfer rejected: destination would exceed the demo slider limit of 200 A.")
     else:
-        st.success("Simulated load transfer is within the entered capacity.")
+        transfer_amount = float(round(transfer_amount))
+        st.session_state[phase_keys[source_phase]] = int(round(source_now - transfer_amount))
+        st.session_state[phase_keys[destination_phase]] = int(round(destination_now + transfer_amount))
+        st.session_state.last_transfer = {
+            "source": source_phase,
+            "destination": destination_phase,
+            "amount": transfer_amount,
+            "source_before": source_now,
+            "destination_before": destination_now,
+            "source_after": source_now - transfer_amount,
+            "destination_after": destination_now + transfer_amount,
+        }
+        st.rerun()
 
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            st.metric(
-                "Primary Current Before",
-                f"{primary_before:.2f} A"
-            )
-
-        with col2:
-            st.metric(
-                "Primary Current After",
-                f"{primary_after:.2f} A",
-                delta=f"{primary_after - primary_before:.2f} A"
-            )
-
-        with col3:
-            st.metric(
-                "Standby Capacity Used",
-                f"{proposed_transfer:.2f} A"
-            )
-
-        st.markdown("#### Post-transfer thermal estimate")
-
-        col4, col5 = st.columns(2)
-
-        with col4:
-            st.metric(
-                "Estimated Temperature After",
-                f"{thermal_after['temperature']:.2f} °C"
-            )
-
-        with col5:
-            st.metric(
-                "Estimated Thermal Status After",
-                thermal_after["status"]
-            )
-
-        if thermal_after["status"] == "NORMAL":
-            st.success(
-                "The illustrative model estimates a NORMAL "
-                "thermal state after transfer."
-            )
-        else:
-            st.warning(
-                "The illustrative model still indicates "
-                f"{thermal_after['status']} after transfer."
-            )
-
-        st.info(
-            f"Recommendation: simulate transferring "
-            f"{proposed_transfer:.2f} A to the standby feeder, "
-            "subject to validated feeder, voltage, protection "
-            "and switching checks."
-        )
-
-else:
-    st.error(
-        "Emergency thermal state: do not treat this demo as authorization "
-        "to transfer load. Follow the validated protection procedure."
+if "last_transfer" in st.session_state:
+    event = st.session_state.last_transfer
+    st.success(
+        f"Last transfer: {event['amount']:.1f} A moved from Phase {event['source']} "
+        f"to Phase {event['destination']}."
     )
+    before_col, after_col = st.columns(2)
+    with before_col:
+        st.markdown("**Before transfer**")
+        st.write(f"Phase {event['source']}: {event['source_before']:.1f} A")
+        st.write(f"Phase {event['destination']}: {event['destination_before']:.1f} A")
+    with after_col:
+        st.markdown("**After transfer**")
+        st.write(f"Phase {event['source']}: {event['source_after']:.1f} A")
+        st.write(f"Phase {event['destination']}: {event['destination_after']:.1f} A")
+    st.metric("Total current across the three simulated phases", f"{sum(current_snapshot.values()):.1f} A",
+              help="The transfer shifts the same amount between phases; the sum remains unchanged.")
 
-st.caption(
-    "Illustrative software simulation only. The calculation assumes "
-    "the primary current decreases by the proposed transfer amount. "
-    "It does not calculate the standby feeder's resulting current, "
-    "validate electrical network constraints, or operate a physical switch."
-)
+    # A clear animated schematic of the transfer action for the judges' demo.
+    st.subheader("Transfer movement")
+    phase_x = {"R": 0, "Y": 1, "B": 2}
+    sx, dx = phase_x[event["source"]], phase_x[event["destination"]]
+    transfer_fig = go.Figure()
+    transfer_fig.add_trace(go.Scatter(
+        x=[0, 1, 2], y=[0, 0, 0], mode="lines",
+        line=dict(color="#94A3B8", width=8), hoverinfo="skip", showlegend=False
+    ))
+    transfer_fig.add_trace(go.Scatter(
+        x=[0, 1, 2], y=[0, 0, 0], mode="markers+text",
+        marker=dict(size=34, color=["#E84A4A", "#F2C744", "#3485E8"],
+                    line=dict(color="white", width=2)),
+        text=["R", "Y", "B"], textposition="middle center",
+        textfont=dict(color="white", size=14), showlegend=False,
+        hovertemplate="Phase %{text}<extra></extra>"
+    ))
+    transfer_fig.add_trace(go.Scatter(
+        x=[sx], y=[0.18], mode="markers",
+        marker=dict(size=17, color="#10B981", line=dict(color="white", width=2)),
+        name="Transferred load", showlegend=False
+    ))
+    transfer_frames = []
+    for frame_idx in range(31):
+        fraction = frame_idx / 30
+        transfer_frames.append(go.Frame(
+            name=str(frame_idx),
+            data=[go.Scatter(x=[sx + (dx - sx) * fraction], y=[0.18 + 0.32 * math.sin(math.pi * fraction)])],
+            traces=[2]
+        ))
+    transfer_fig.frames = transfer_frames
+    transfer_fig.update_layout(
+        height=300, margin=dict(l=20, r=20, t=30, b=20),
+        paper_bgcolor="white", plot_bgcolor="white",
+        xaxis=dict(range=[-0.5, 2.5], tickvals=[0, 1, 2], ticktext=["Phase R", "Phase Y", "Phase B"],
+                   showgrid=False, zeroline=False, fixedrange=True),
+        yaxis=dict(range=[-0.25, 0.75], visible=False, fixedrange=True),
+        title=f"Moving {event['amount']:.1f} A: Phase {event['source']} → Phase {event['destination']}",
+        updatemenus=[dict(type="buttons", showactive=False, x=0.5, y=-0.18, xanchor="center",
+                          buttons=[dict(label="▶ Play transfer animation", method="animate", args=[None,
+                              {"frame": {"duration": 45, "redraw": True},
+                               "transition": {"duration": 0}, "fromcurrent": True}])])]
+    )
+    st.plotly_chart(transfer_fig, width="stretch", config={"displaylogo": False})
+    st.caption("The animation illustrates the selected simulated transfer. The 3D feeder flow remains a separate continuous visualization.")
+
+# Compatibility values for the existing primary/standby schematic below.
+primary_before = float(monitored_current)
+proposed_transfer = float(st.session_state.last_transfer["amount"]) if "last_transfer" in st.session_state else 0.0
+standby_capacity = 50.0
+primary_after = max(0.0, primary_before - proposed_transfer)
 
 # ---------- VISUAL FEEDER AND SWITCH SIMULATION ----------
 st.header("⚡ Primary & Standby Feeder Visualization")
 
 # Determine the simulated switch state from existing inputs.
-transfer_active = (
-    thermal["status"] == "WARNING / TRANSFER"
-    and proposed_transfer > 0
-    and proposed_transfer <= standby_capacity
-)
+transfer_active = "last_transfer" in st.session_state
 
 if transfer_active:
-    switch_label = "TRANSFER SIMULATED"
+    last = st.session_state.last_transfer
+    switch_label = f"TRANSFER COMPLETE: {last['amount']:.1f} A"
     switch_color = "#16a34a"
-    primary_label = f"Primary: {primary_after:.1f} A"
-    standby_label = f"Standby transfer: {proposed_transfer:.1f} A"
+    primary_label = f"Phase {last['source']}: {last['source_after']:.1f} A"
+    standby_label = f"Phase {last['destination']}: {last['destination_after']:.1f} A"
 elif thermal["status"] == "EMERGENCY / TRIP":
     switch_label = "EMERGENCY - NO SWITCH ACTION"
     switch_color = "#dc2626"

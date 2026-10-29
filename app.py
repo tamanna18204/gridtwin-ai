@@ -428,12 +428,6 @@ st.button(
 if st.session_state.get("transfer_error"):
     st.error(st.session_state.transfer_error)
 
-    if destination_now + transfer_amount > 200:
-        st.session_state.transfer_error = (
-            "Destination would exceed the 200 A limit."
-        )
-        return
-
     transfer_amount = float(round(transfer_amount))
 
     st.session_state[phase_keys[source_phase]] = int(

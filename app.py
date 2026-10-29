@@ -372,12 +372,6 @@ st.caption(
     f"Available source current: {available_source:.1f} A · "
     f"Destination current before transfer: {current_snapshot[destination_phase]:.1f} A"
 )
-    if transfer_amount > source_now:
-        st.session_state.transfer_error = (
-            f"Phase {source_phase} only has {source_now:.1f} A available."
-        )
-        return
-    
 def transfer_load():
     source_phase = st.session_state.transfer_source
     destination_phase = st.session_state.transfer_destination

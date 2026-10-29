@@ -373,7 +373,7 @@ st.caption(
     f"Destination current before transfer: {current_snapshot[destination_phase]:.1f} A"
 )
 
-if st.button("⚡ TRANSFER LOAD", type="primary", use_container_width=True):
+if st.button("⚡ TRANSFER LOAD", type="primary", width="stretch"):
     source_now = float(st.session_state[phase_keys[source_phase]])
     destination_now = float(st.session_state[phase_keys[destination_phase]])
     if transfer_amount <= 0:
@@ -774,6 +774,33 @@ for phase, color, current, path, transformer_name in flow_paths:
         hovertemplate=f"<b>{transformer_name} · Phase {phase}</b><br>Simulated current: {current:.1f} A<br>Direction: transformer → load bank<extra></extra>",
     ))
 
+# If a transfer has been performed, add a visible green marker to the 3D
+# standby/tie feeder. This is a visual simulation of the selected transfer path.
+transfer_3d_trace_index = None
+transfer_3d_start_x = None
+transfer_3d_end_x = None
+if "last_transfer" in st.session_state:
+    transfer_event = st.session_state.last_transfer
+    transfer_x_positions = {"R": -0.2, "Y": 1.6, "B": 3.4}
+    transfer_3d_start_x = transfer_x_positions[transfer_event["source"]]
+    transfer_3d_end_x = transfer_x_positions[transfer_event["destination"]]
+    transfer_3d_trace_index = len(fig.data)
+    transfer_start = (transfer_3d_start_x, -3.65, 0.62)
+    fig.add_trace(go.Scatter3d(
+        x=[transfer_start[0]], y=[transfer_start[1]], z=[transfer_start[2]],
+        mode="markers",
+        marker=dict(size=9, color="#10B981", opacity=1.0,
+                    line=dict(color="#FFFFFF", width=1.5)),
+        name="Simulated transferred load",
+        showlegend=False,
+        hovertemplate=(
+            f"<b>Simulated transfer: {transfer_event['amount']:.1f} A</b><br>"
+            f"Phase {transfer_event['source']} → Phase {transfer_event['destination']}"
+            "<extra></extra>"
+        )
+    ))
+    particle_trace_indices.append(transfer_3d_trace_index)
+
 animation_frames = []
 for frame_idx in range(frame_count):
     frame_data = []
@@ -793,6 +820,16 @@ for frame_idx in range(frame_count):
             x=[pt[0] for pt in points], y=[pt[1] for pt in points],
             z=[pt[2] + 0.035 for pt in points],
         ))
+
+    # Move the green transfer marker along the tie feeder between the selected
+    # phases. The existing current-flow particles continue animating as before.
+    if transfer_3d_trace_index is not None:
+        fraction = frame_idx / max(frame_count - 1, 1)
+        transfer_x = transfer_3d_start_x + (transfer_3d_end_x - transfer_3d_start_x) * fraction
+        frame_data.append(go.Scatter3d(
+            x=[transfer_x], y=[-3.65], z=[0.62]
+        ))
+
     animation_frames.append(go.Frame(name=str(frame_idx), data=frame_data, traces=particle_trace_indices))
 
 fig.frames = animation_frames

@@ -372,8 +372,12 @@ st.caption(
     f"Available source current: {available_source:.1f} A · "
     f"Destination current before transfer: {current_snapshot[destination_phase]:.1f} A"
 )
-
-
+    if transfer_amount > source_now:
+        st.session_state.transfer_error = (
+            f"Phase {source_phase} only has {source_now:.1f} A available."
+        )
+        return
+    
 def transfer_load():
     source_phase = st.session_state.transfer_source
     destination_phase = st.session_state.transfer_destination
@@ -389,23 +393,23 @@ def transfer_load():
     destination_now = float(st.session_state[phase_keys[destination_phase]])
 
     if transfer_amount <= 0:
-        st.session_state.transfer_error = "Enter a transfer amount greater than zero."
+        st.session_state.transfer_error = "Enter an amount greater than zero."
+        return
+
+    if transfer_amount > source_now:
+        st.session_state.transfer_error = (
+            f"Phase {source_phase} only has {source_now:.1f} A available."
+        )
         return
 
     if destination_now + transfer_amount > 200:
-        st.session_state.transfer_error = (
-            "Destination would exceed the 200 A limit."
-        )
+        st.session_state.transfer_error = "Destination would exceed 200 A."
         return
 
     transfer_amount = float(round(transfer_amount))
 
-    st.session_state[phase_keys[source_phase]] = int(
-        round(source_now - transfer_amount)
-    )
-    st.session_state[phase_keys[destination_phase]] = int(
-        round(destination_now + transfer_amount)
-    )
+    st.session_state[phase_keys[source_phase]] = int(round(source_now - transfer_amount))
+    st.session_state[phase_keys[destination_phase]] = int(round(destination_now + transfer_amount))
 
     st.session_state.last_transfer = {
         "source": source_phase,
@@ -418,6 +422,8 @@ def transfer_load():
     }
 
     st.session_state.transfer_error = ""
+
+
 st.button(
     "⚡ TRANSFER LOAD",
     type="primary",
@@ -427,11 +433,6 @@ st.button(
 
 if st.session_state.get("transfer_error"):
     st.error(st.session_state.transfer_error)
-    if transfer_amount > source_now:
-        st.session_state.transfer_error = (
-            f"Phase {source_phase} only has {source_now:.1f} A available."
-        )
-        return
 
     if destination_now + transfer_amount > 200:
         st.session_state.transfer_error = (

@@ -341,6 +341,56 @@ st.caption(
     "require engineering validation."
 )
 
+# ---------- LIVE DIGITAL TWIN SYNCHRONIZATION ----------
+st.header("🔄 Live Digital Twin Synchronization")
+st.caption(
+    "The virtual asset state is recalculated from simulated sensor inputs "
+    "on every Streamlit update. No physical sensor or switchgear is connected."
+)
+
+twin_asset_rows = [
+    {
+        "Virtual asset": "Transformer bank",
+        "Input / telemetry": f"Peak phase current: {max_current:.1f} A",
+        "Virtual condition": thermal["status"],
+        "Twin response": f"Estimated temperature: {thermal['temperature']:.1f} °C"
+    },
+    {
+        "Virtual asset": "R-phase feeder",
+        "Input / telemetry": f"{current_r:.1f} A",
+        "Virtual condition": "Above demo limit" if current_r > 75 else "Within demo limit",
+        "Twin response": f"AI next-step estimate: {predictions['R']:.1f} A"
+    },
+    {
+        "Virtual asset": "Y-phase feeder",
+        "Input / telemetry": f"{current_y:.1f} A",
+        "Virtual condition": "Above demo limit" if current_y > 75 else "Within demo limit",
+        "Twin response": f"AI next-step estimate: {predictions['Y']:.1f} A"
+    },
+    {
+        "Virtual asset": "B-phase feeder",
+        "Input / telemetry": f"{current_b:.1f} A",
+        "Virtual condition": "Above demo limit" if current_b > 75 else "Within demo limit",
+        "Twin response": f"AI next-step estimate: {predictions['B']:.1f} A"
+    },
+    {
+        "Virtual asset": "Network balance",
+        "Input / telemetry": f"Imbalance: {imbalance_percent:.1f}%",
+        "Virtual condition": status,
+        "Twin response": "Recalculate transfer recommendation" if max_current > 75 else "Continue monitoring"
+    }
+]
+st.dataframe(twin_asset_rows, hide_index=True, width="stretch")
+twin_col1, twin_col2, twin_col3 = st.columns(3)
+twin_col1.metric("Virtual asset status", thermal["status"])
+twin_col2.metric("Live phase imbalance", f"{imbalance_percent:.1f}%")
+twin_col3.metric("Predicted peak current", f"{max(predictions.values()):.1f} A")
+st.info(
+    "Digital Twin loop: simulated sensor inputs → virtual asset state → "
+    "AI/thermal analysis → transfer recommendation → updated virtual state. "
+    "After a confirmed transfer, changed phase currents feed back into this loop."
+)
+
 # ---------- ALGORITHM BASED LOAD TRANSFER ----------
 
 st.header("🔀 Intelligent Load Transfer")
@@ -827,6 +877,14 @@ add_label(-3.65, -4.15, 2.55, "MAIN BUSBAR", size=9)
 add_line([(-4.15,0,2.0),(-3.8,0,2.0)], "#B87333", "Breaker to busbar", 10)
 
 # ---------- Three transformer bays ----------
+# Virtual transformer tank colour follows the calculated thermal state.
+if thermal["status"] == "NORMAL":
+    twin_tank_color = "#4F9D78"
+elif thermal["status"] == "WARNING / TRANSFER":
+    twin_tank_color = "#D69E36"
+else:
+    twin_tank_color = "#C65353"
+
 transformers = [
     {"name":"TR-A", "x":-2.2, "y":-2.45, "load":"LOAD BANK A", "loadx":5.1, "loady":-2.5},
     {"name":"TR-B", "x":-2.2, "y":0.0, "load":"LOAD BANK B", "loadx":5.1, "loady":0.0},
@@ -837,7 +895,7 @@ for tr in transformers:
     # Bay foundation
     add_box(x-0.85,x+1.35,y-0.9,y+0.9,0.0,0.13,"#BFC8D2",f"{name} foundation")
     # Transformer tank and lid
-    add_box(x-0.55,x+0.75,y-0.62,y+0.62,0.15,1.75,"#7C8C9C",f"{name} transformer tank")
+    add_box(x-0.55,x+0.75,y-0.62,y+0.62,0.15,1.75,twin_tank_color,f"{name} transformer tank · {thermal['status']}")
     add_box(x-0.48,x+0.68,y-0.56,y+0.56,1.75,1.92,"#A9B5C1",f"{name} transformer lid")
     # Cooling fins on both sides
     for i in range(5):
@@ -924,8 +982,8 @@ def point_along_path(path, fraction):
 # Two marker layers per phase: a soft halo and a bright core make the motion
 # easier to see against the feeder wires.
 particle_trace_indices = []
-particle_count = 5
-frame_count = 120
+particle_count = 3
+frame_count = 36
 for phase, color, current, path, transformer_name in flow_paths:
     initial_points = [point_along_path(path, pidx / particle_count) for pidx in range(particle_count)]
     halo_idx = len(fig.data)
@@ -1015,7 +1073,7 @@ fig.frames = animation_frames
 
 # ---------- Plot styling ----------
 fig.update_layout(
-    height=820,
+    height=680,
     margin=dict(l=0, r=0, t=20, b=20),
     paper_bgcolor="#F8FAFC",
     plot_bgcolor="#F8FAFC",
@@ -1034,7 +1092,7 @@ fig.update_layout(
 )
 
 st.subheader("Interactive 3D Substation Model")
-st.caption("Current-flow animation: press PLAY to keep particles moving continuously; press PAUSE to stop them. Smaller glowing particles show simulated flow from transformer to load bank. Drag to rotate • Scroll to zoom.")
+st.caption("The transformer tank colour follows the calculated thermal state; phase inputs drive feeder-flow indicators. Press PLAY for a lightweight illustrative flow animation. Drag to rotate • Scroll to zoom.")
 
 # Render Plotly in an HTML component so JavaScript can keep cycling through
 # animation frames until the user explicitly presses Pause. Native Plotly
@@ -1057,7 +1115,7 @@ function playCurrentFlow() {
     if (!isPlaying) return;
     Plotly.animate(gd, [String(frameIndex)], {
       mode: 'immediate',
-      frame: {duration: 45, redraw: true},
+      frame: {duration: 120, redraw: false},
       transition: {duration: 0}
     }).then(() => {
       frameIndex = (frameIndex + 1) % totalFrames;
@@ -1104,7 +1162,7 @@ controls_html = r"""
 """
 st.components.v1.html(
     f"<!doctype html><html><head><meta charset='utf-8'></head><body style='margin:0;background:#f8fafc'>{controls_html}{plot_html}</body></html>",
-    height=850,
+    height=710,
     scrolling=False,
 )
 # ---------- Monitoring panels ----------

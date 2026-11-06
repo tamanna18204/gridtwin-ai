@@ -155,7 +155,7 @@ st.subheader("⚠️ Predicted Overload Warning")
 
 # Illustrative demo threshold only.
 # Replace with validated equipment-specific ratings when available.
-DEMO_CURRENT_THRESHOLD = 100.0  # Amperes
+DEMO_CURRENT_THRESHOLD = 75.0  # Amperes
 
 st.caption(
     f"Illustrative demo threshold: {DEMO_CURRENT_THRESHOLD:.1f} A per phase. "
@@ -341,114 +341,240 @@ st.caption(
     "require engineering validation."
 )
 
-# ---------- INTERACTIVE LOAD TRANSFER SIMULATION ----------
-st.header("🔀 Interactive Load Transfer")
+# ---------- ALGORITHM BASED LOAD TRANSFER ----------
+
+st.header("🔀 Intelligent Load Transfer")
 st.caption(
-    "Choose a source and destination phase, then transfer a selected amount. "
-    "This is a software simulation only; it does not operate physical switchgear."
+    "The algorithm detects overloaded phases, checks destination capacity "
+    "and recommends the best transfer."
 )
 
-phase_keys = {"R": "current_r", "Y": "current_y", "B": "current_b"}
+MAX_CURRENT = 75.0
+
+phase_keys = {
+    "R": "current_r",
+    "Y": "current_y",
+    "B": "current_b"
+}
+
 current_snapshot = {
     "R": float(st.session_state.current_r),
     "Y": float(st.session_state.current_y),
-    "B": float(st.session_state.current_b),
+    "B": float(st.session_state.current_b)
 }
-source_phase = st.selectbox("Transfer load FROM phase", ["R", "Y", "B"], index=0, key="transfer_source")
-destination_options = [p for p in ["R", "Y", "B"] if p != source_phase]
-destination_phase = st.selectbox(
-    "Transfer load TO phase", destination_options, key="transfer_destination"
-)
-available_source = current_snapshot[source_phase]
-transfer_amount = st.number_input(
-    "Load to transfer (A)",
-    min_value=0.0,
-    max_value=float(max(available_source, 0.0)),
-    value=float(min(10.0, available_source)),
-    step=1.0,
-    key="transfer_amount",
-)
-st.caption(
-    f"Available source current: {available_source:.1f} A · "
-    f"Destination current before transfer: {current_snapshot[destination_phase]:.1f} A"
-)
-def transfer_load():
-    source_phase = st.session_state.transfer_source
-    destination_phase = st.session_state.transfer_destination
-    transfer_amount = float(st.session_state.transfer_amount)
 
-    phase_keys = {
-        "R": "current_r",
-        "Y": "current_y",
-        "B": "current_b",
-    }
+# STEP 1: Detect overloaded phases
 
-    source_now = float(st.session_state[phase_keys[source_phase]])
-    destination_now = float(st.session_state[phase_keys[destination_phase]])
+overloaded = [
+    p for p in ["R", "Y", "B"]
+    if current_snapshot[p] > MAX_CURRENT
+]
 
-    if transfer_amount <= 0:
-        st.session_state.transfer_error = "Enter an amount greater than zero."
-        return
+warning = [
+    p for p in ["R", "Y", "B"]
+    if 0.90 * MAX_CURRENT <= current_snapshot[p] <= MAX_CURRENT
+]
 
-    if transfer_amount > source_now:
-        st.session_state.transfer_error = (
-            f"Phase {source_phase} only has {source_now:.1f} A available."
+st.write("### Phase Load Detection")
+
+cols = st.columns(3)
+
+for col, phase in zip(cols, ["R", "Y", "B"]):
+    with col:
+        value = current_snapshot[phase]
+        st.metric(f"Phase {phase}", f"{value:.1f} A")
+
+        if value > MAX_CURRENT:
+            st.error("OVERLOADED")
+        elif value >= 0.90 * MAX_CURRENT:
+            st.warning("NEAR LIMIT")
+        else:
+            st.success("NORMAL")
+
+# STEP 2: Generate best transfer recommendation
+
+recommendation = None
+
+if len(overloaded) >= 2:
+
+    st.error(
+        "Multiple phases are overloaded. "
+        "Automatic transfer is blocked. Manual intervention required."
+    )
+
+elif len(overloaded) == 1:
+
+    source = overloaded[0]
+    source_current = current_snapshot[source]
+
+    excess_load = source_current - MAX_CURRENT
+
+    candidates = []
+
+    for target in ["R", "Y", "B"]:
+
+        if target == source:
+            continue
+
+        target_current = current_snapshot[target]
+
+        available_capacity = MAX_CURRENT - target_current
+
+        if available_capacity <= 0:
+            continue
+
+        ideal_transfer = (source_current - target_current) / 2
+
+        amount = min(
+            excess_load,
+            available_capacity,
+            ideal_transfer
         )
-        return
 
-    if destination_now + transfer_amount > 200:
-        st.session_state.transfer_error = "Destination would exceed 200 A."
-        return
+        if amount <= 0:
+            continue
 
-    transfer_amount = float(round(transfer_amount))
+        source_after = source_current - amount
+        target_after = target_current + amount
 
-    st.session_state[phase_keys[source_phase]] = int(round(source_now - transfer_amount))
-    st.session_state[phase_keys[destination_phase]] = int(round(destination_now + transfer_amount))
+        score = (
+            max(source_after, target_after),
+            abs(source_after - target_after)
+        )
 
-    st.session_state.last_transfer = {
-        "source": source_phase,
-        "destination": destination_phase,
-        "amount": transfer_amount,
-        "source_before": source_now,
-        "destination_before": destination_now,
-        "source_after": source_now - transfer_amount,
-        "destination_after": destination_now + transfer_amount,
-    }
+        candidates.append({
+            "source": source,
+            "destination": target,
+            "amount": round(amount, 2),
+            "source_before": source_current,
+            "destination_before": target_current,
+            "source_after": round(source_after, 2),
+            "destination_after": round(target_after, 2),
+            "score": score
+        })
 
-    st.session_state.transfer_error = ""
+    if candidates:
 
+        recommendation = min(
+            candidates,
+            key=lambda x: x["score"]
+        )
 
-st.button(
-    "⚡ TRANSFER LOAD",
-    type="primary",
-    width="stretch",
-    on_click=transfer_load,
+        st.error(f"⚠️ Phase {source} is OVERLOADED!")
+
+        st.subheader("🤖 AI Algorithm Recommendation")
+
+        st.success(
+            f"Transfer {recommendation['amount']:.2f} A "
+            f"from Phase {source} to Phase "
+            f"{recommendation['destination']}."
+        )
+
+        st.write("### Before and After (Projected)")
+
+        before_col, after_col = st.columns(2)
+
+        with before_col:
+            st.write("**Before Transfer**")
+            st.write(
+                f"{source}: {recommendation['source_before']:.2f} A"
+            )
+            st.write(
+                f"{recommendation['destination']}: "
+                f"{recommendation['destination_before']:.2f} A"
+            )
+
+        with after_col:
+            st.write("**After Transfer**")
+            st.write(
+                f"{source}: {recommendation['source_after']:.2f} A"
+            )
+            st.write(
+                f"{recommendation['destination']}: "
+                f"{recommendation['destination_after']:.2f} A"
+            )
+
+        st.info(
+            "Review the recommendation and confirm to apply "
+            "the transfer in the simulation."
+        )
+
+        # STEP 3: Execute transfer only after confirmation
+
+        def apply_transfer(source, destination, amount):
+
+            source_now = float(
+                st.session_state[phase_keys[source]]
+            )
+
+            destination_now = float(
+                st.session_state[phase_keys[destination]]
+            )
+
+            # Recheck conditions before execution
+            if source_now <= MAX_CURRENT:
+                return
+
+            if destination_now + amount > MAX_CURRENT:
+                return
+
+            if amount > source_now - MAX_CURRENT:
+                return
+
+            # Actual simulation update
+            st.session_state[phase_keys[source]] = round(
+                source_now - amount
+            )
+
+            st.session_state[phase_keys[destination]] = round(
+                destination_now + amount
+            )
+
+            st.session_state.last_transfer = {
+                "source": source,
+                "destination": destination,
+                "amount": amount,
+                "source_before": source_now,
+                "destination_before": destination_now,
+                "source_after": source_now - amount,
+                "destination_after": destination_now + amount
+            }
+
+        st.button(
+            "⚡ CONFIRM & TRANSFER LOAD",
+            type="primary",
+            width="stretch",
+            on_click=apply_transfer,
+            args=(
+                recommendation["source"],
+                recommendation["destination"],
+                recommendation["amount"]
+            )
+        )
+
+    else:
+
+        st.error(
+            "No suitable destination phase has enough available capacity. "
+            "Manual intervention required."
+        )
+
+elif len(warning) > 0:
+
+    st.warning(
+        f"Phase(s) {warning} are approaching the demo current limit."
+    )
+
+else:
+
+    st.success(
+        "All phases are within the configured 75 A demo current limit."
+    )
+
+st.caption(
+    "75 A is an illustrative software threshold, not a validated "
+    "transformer or conductor rating."
 )
-
-if st.session_state.get("transfer_error"):
-    st.error(st.session_state.transfer_error)
-
-    transfer_amount = float(round(transfer_amount))
-
-    st.session_state[phase_keys[source_phase]] = int(
-        round(source_now - transfer_amount)
-    )
-    st.session_state[phase_keys[destination_phase]] = int(
-        round(destination_now + transfer_amount)
-    )
-
-    st.session_state.last_transfer = {
-        "source": source_phase,
-        "destination": destination_phase,
-        "amount": transfer_amount,
-        "source_before": source_now,
-        "destination_before": destination_now,
-        "source_after": source_now - transfer_amount,
-        "destination_after": destination_now + transfer_amount,
-    }
-
-    st.session_state.transfer_error = ""
-
 
 if "last_transfer" in st.session_state:
     event = st.session_state.last_transfer

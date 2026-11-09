@@ -817,6 +817,30 @@ def add_box(x0, x1, y0, y1, z0, z1, color, name, opacity=1.0, line_color=None):
         **({"contour": {"show": False}} if False else {})
     ))
 
+
+
+def add_cylinder(x, y, z0, z1, radius, color, name, sides=10):
+    """Lightweight vertical cylinder mesh for bushings, gauges and pipe fittings."""
+    vertices = []
+    for z in (z0, z1):
+        for n in range(sides):
+            angle = 2 * math.pi * n / sides
+            vertices.append((x + radius * math.cos(angle), y + radius * math.sin(angle), z))
+    faces_i, faces_j, faces_k = [], [], []
+    for n in range(sides):
+        nxt = (n + 1) % sides
+        faces_i.extend([n, n, sides + n, 0])
+        faces_j.extend([nxt, sides + nxt, sides + nxt, nxt])
+        faces_k.extend([sides + nxt, sides + n, n, sides])
+    fig.add_trace(go.Mesh3d(
+        x=[v[0] for v in vertices], y=[v[1] for v in vertices], z=[v[2] for v in vertices],
+        i=faces_i, j=faces_j, k=faces_k, color=color, name=name,
+        showscale=False, flatshading=False,
+        lighting=dict(ambient=0.68, diffuse=0.72, specular=0.35, roughness=0.45),
+        hovertemplate=f"<b>{name}</b><extra></extra>"
+    ))
+
+
 def add_line(points, color, name, width=6, dash="solid", opacity=1.0):
     fig.add_trace(go.Scatter3d(
         x=[p[0] for p in points], y=[p[1] for p in points], z=[p[2] for p in points],
@@ -862,7 +886,10 @@ for x in [-5.8, -4.9]:
     add_box(x, x+0.12, -0.25, -0.13, 0.0, 3.0, "#7A8795", "Incoming line gantry")
 add_box(-5.95, -4.75, -0.28, -0.10, 2.85, 3.0, "#64748B", "Gantry crossbar")
 for y, c, p in [(-0.18,"#E84A4A","R"),(0.0,"#F2C744","Y"),(0.18,"#3485E8","B")]:
-    add_line([(-6.5,y,3.2),(-5.35,y,3.2),(-4.5,y,2.9)], c, f"Incoming {p} conductor", 5)
+    add_line([(-6.5,y,3.2),(-5.35,y,3.2),(-4.5,y,2.9)], c, f"Incoming {p} ACSR conductor core", 5)
+    for strand_offset in (-0.035, 0.035):
+        add_line([(-6.5,y+strand_offset,3.2),(-5.35,y+strand_offset,3.2),(-4.5,y+strand_offset,2.9)],
+                 "#CBD5DF", f"Incoming {p} ACSR outer strand", 1.5, opacity=0.9)
     add_marker(-5.35,y,3.2,c,f"{p} incoming terminal",5)
 add_label(-5.8, -1.0, 3.55, "INCOMING SUPPLY", size=10)
 
@@ -894,19 +921,31 @@ for tr in transformers:
     x, y, name = tr["x"], tr["y"], tr["name"]
     # Bay foundation
     add_box(x-0.85,x+1.35,y-0.9,y+0.9,0.0,0.13,"#BFC8D2",f"{name} foundation")
-    # Transformer tank and lid
+    # Main oil tank, raised lid and front nameplate
     add_box(x-0.55,x+0.75,y-0.62,y+0.62,0.15,1.75,twin_tank_color,f"{name} transformer tank · {thermal['status']}")
     add_box(x-0.48,x+0.68,y-0.56,y+0.56,1.75,1.92,"#A9B5C1",f"{name} transformer lid")
+    add_box(x-0.25,x+0.42,y-0.635,y-0.615,0.72,1.05,"#E8EDF2",f"{name} identification plate")
+    # Conservator tank and its connecting oil pipe
+    add_box(x-0.28,x+0.48,y+0.18,y+0.52,2.25,2.55,"#8799A8",f"{name} conservator oil tank")
+    add_line([(x+0.42,y+0.30,2.25),(x+0.62,y+0.30,2.12),(x+0.62,y+0.30,1.88)], "#B7C3CC", f"{name} oil pipe", 5)
+    # Oil level / temperature gauge details
+    add_cylinder(x+0.52,y-0.35,1.92,2.12,0.075,"#E6B85C",f"{name} oil gauge", sides=8)
+    add_marker(x+0.52,y-0.35,2.14,"#263747",f"{name} gauge pointer",3)
     # Cooling fins on both sides
     for i in range(5):
         xx = x - 0.42 + i*0.22
         add_box(xx,xx+0.07,y-0.78,y-0.64,0.35,1.55,"#526779",f"{name} cooling fin")
         add_box(xx,xx+0.07,y+0.64,y+0.78,0.35,1.55,"#526779",f"{name} cooling fin")
-    # Three bushings/terminals
+    # Three porcelain-style ribbed bushings with metallic terminal caps
     for j, (phase, color, current) in enumerate(phase_data):
         yy = y - 0.34 + j*0.34
-        add_box(x+0.12,x+0.28,yy-0.09,yy+0.09,1.92,2.35,color,f"{name} {phase} bushing")
-        add_marker(x+0.20,yy,2.4,color,f"{name} {phase} terminal",5)
+        add_cylinder(x+0.20,yy,1.92,2.02,0.105,"#D9E0E6",f"{name} {phase} bushing base")
+        for rib in range(4):
+            z_rib = 2.03 + rib*0.075
+            add_cylinder(x+0.20,yy,z_rib,z_rib+0.035,0.105 if rib in (0,3) else 0.085,
+                         "#E8EDF1",f"{name} {phase} porcelain insulator rib", sides=8)
+        add_cylinder(x+0.20,yy,2.34,2.47,0.045,"#B9C4CE",f"{name} {phase} terminal stud", sides=8)
+        add_marker(x+0.20,yy,2.48,color,f"{name} {phase} terminal",5)
     # label above the unit
     add_label(x+0.05,y,3.05,name,size=10)
     # connection from busbar to transformer
@@ -1103,7 +1142,7 @@ const gd = document.getElementById('{plot_id}');
 let frameIndex = 0;
 let isPlaying = false;
 let timerId = null;
-const totalFrames = 120;
+const totalFrames = 36;
 function playCurrentFlow() {
   if (isPlaying) return;
   isPlaying = true;

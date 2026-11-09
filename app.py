@@ -3,6 +3,7 @@ import plotly.graph_objects as go
 import math
 from thermal_model import calculate_thermal_state
 from ai_model import predict_next_load
+import requests
 
 
 st.set_page_config(
@@ -44,6 +45,36 @@ current_r = st.sidebar.slider("Phase R current (A)", 0, 200, key="current_r")
 current_y = st.sidebar.slider("Phase Y current (A)", 0, 200, key="current_y")
 current_b = st.sidebar.slider("Phase B current (A)", 0, 200, key="current_b")
 ambient_temp = st.sidebar.slider("Ambient temperature (°C)", -10, 60, 30)
+
+# ---------- CONNECT TO FLASK BACKEND ----------
+
+API_URL = "http://127.0.0.1:5000"
+
+try:
+    response = requests.post(
+        f"{API_URL}/update_twin",
+        json={
+            "R": current_r,
+            "Y": current_y,
+            "B": current_b,
+            "ambient_temp": ambient_temp
+        },
+        timeout=(0.4, 0.8)
+    )
+
+    response.raise_for_status()
+    backend_data = response.json()
+
+    st.sidebar.success("Flask Backend Connected")
+
+    with st.expander("View Backend Digital Twin Data"):
+        st.json(backend_data)
+
+except requests.exceptions.RequestException as e:
+    backend_data = None
+    st.sidebar.error("Flask Backend Disconnected")
+    st.sidebar.caption(str(e))
+    
 show_labels = st.sidebar.checkbox("Show equipment labels", value=True)
 show_grid = st.sidebar.checkbox("Show ground grid", value=False)
 
@@ -56,12 +87,11 @@ avg = (current_r + current_y + current_b) / 3
 # ---------- AI LOAD PREDICTION ----------
 st.header("AI-Based Next Load Prediction")
 st.caption("Prediction horizon: next model step")
-predictions = predict_next_load(
-    current_r,
-    current_y,
-    current_b,
-    ambient_temp
-)
+@st.cache_data(show_spinner=False)
+def cached_prediction(r, y, b, ambient):
+    return predict_next_load(r, y, b, ambient)
+
+predictions = cached_prediction(current_r, current_y, current_b, ambient_temp)
 
 col1, col2, col3 = st.columns(3)
 
@@ -155,7 +185,7 @@ st.subheader("⚠️ Predicted Overload Warning")
 
 # Illustrative demo threshold only.
 # Replace with validated equipment-specific ratings when available.
-DEMO_CURRENT_THRESHOLD = 75.0  # Amperes
+DEMO_CURRENT_THRESHOLD = 100.0  # Amperes
 
 st.caption(
     f"Illustrative demo threshold: {DEMO_CURRENT_THRESHOLD:.1f} A per phase. "
@@ -341,296 +371,170 @@ st.caption(
     "require engineering validation."
 )
 
-# ---------- LIVE DIGITAL TWIN SYNCHRONIZATION ----------
-st.header("🔄 Live Digital Twin Synchronization")
+# ---------- RECOMMENDATION-DRIVEN LOAD TRANSFER SIMULATION ----------
+st.header("🔀 Intelligent Load Transfer Recommendation")
 st.caption(
-    "The virtual asset state is recalculated from simulated sensor inputs "
-    "on every Streamlit update. No physical sensor or switchgear is connected."
+    "The recommendation evaluates present and AI-predicted phase currents. "
+    "Approving changes this software simulation only; it does not operate physical switchgear."
 )
 
-twin_asset_rows = [
-    {
-        "Virtual asset": "Transformer bank",
-        "Input / telemetry": f"Peak phase current: {max_current:.1f} A",
-        "Virtual condition": thermal["status"],
-        "Twin response": f"Estimated temperature: {thermal['temperature']:.1f} °C"
-    },
-    {
-        "Virtual asset": "R-phase feeder",
-        "Input / telemetry": f"{current_r:.1f} A",
-        "Virtual condition": "Above demo limit" if current_r > 75 else "Within demo limit",
-        "Twin response": f"AI next-step estimate: {predictions['R']:.1f} A"
-    },
-    {
-        "Virtual asset": "Y-phase feeder",
-        "Input / telemetry": f"{current_y:.1f} A",
-        "Virtual condition": "Above demo limit" if current_y > 75 else "Within demo limit",
-        "Twin response": f"AI next-step estimate: {predictions['Y']:.1f} A"
-    },
-    {
-        "Virtual asset": "B-phase feeder",
-        "Input / telemetry": f"{current_b:.1f} A",
-        "Virtual condition": "Above demo limit" if current_b > 75 else "Within demo limit",
-        "Twin response": f"AI next-step estimate: {predictions['B']:.1f} A"
-    },
-    {
-        "Virtual asset": "Network balance",
-        "Input / telemetry": f"Imbalance: {imbalance_percent:.1f}%",
-        "Virtual condition": status,
-        "Twin response": "Recalculate transfer recommendation" if max_current > 75 else "Continue monitoring"
-    }
-]
-st.dataframe(twin_asset_rows, hide_index=True, width="stretch")
-twin_col1, twin_col2, twin_col3 = st.columns(3)
-twin_col1.metric("Virtual asset status", thermal["status"])
-twin_col2.metric("Live phase imbalance", f"{imbalance_percent:.1f}%")
-twin_col3.metric("Predicted peak current", f"{max(predictions.values()):.1f} A")
-st.info(
-    "Digital Twin loop: simulated sensor inputs → virtual asset state → "
-    "AI/thermal analysis → transfer recommendation → updated virtual state. "
-    "After a confirmed transfer, changed phase currents feed back into this loop."
-)
-
-# ---------- ALGORITHM BASED LOAD TRANSFER ----------
-
-st.header("🔀 Intelligent Load Transfer")
-st.caption(
-    "The algorithm detects overloaded phases, checks destination capacity "
-    "and recommends the best transfer."
-)
-
-MAX_CURRENT = 75.0
-
-phase_keys = {
-    "R": "current_r",
-    "Y": "current_y",
-    "B": "current_b"
-}
-
+phase_keys = {"R": "current_r", "Y": "current_y", "B": "current_b"}
 current_snapshot = {
     "R": float(st.session_state.current_r),
     "Y": float(st.session_state.current_y),
-    "B": float(st.session_state.current_b)
+    "B": float(st.session_state.current_b),
 }
+predicted_snapshot = {p: float(predictions[p]) for p in ("R", "Y", "B")}
 
-# STEP 1: Detect overloaded phases
-
-overloaded = [
-    p for p in ["R", "Y", "B"]
-    if current_snapshot[p] > MAX_CURRENT
-]
-
-warning = [
-    p for p in ["R", "Y", "B"]
-    if 0.90 * MAX_CURRENT <= current_snapshot[p] <= MAX_CURRENT
-]
-
-st.write("### Phase Load Detection")
-
-cols = st.columns(3)
-
-for col, phase in zip(cols, ["R", "Y", "B"]):
-    with col:
-        value = current_snapshot[phase]
-        st.metric(f"Phase {phase}", f"{value:.1f} A")
-
-        if value > MAX_CURRENT:
-            st.error("OVERLOADED")
-        elif value >= 0.90 * MAX_CURRENT:
-            st.warning("NEAR LIMIT")
-        else:
-            st.success("NORMAL")
-
-# STEP 2: Generate best transfer recommendation
+if "rejected_transfer_targets" not in st.session_state:
+    st.session_state.rejected_transfer_targets = []
+if "transfer_decision_message" not in st.session_state:
+    st.session_state.transfer_decision_message = ""
 
 recommendation = None
-
-if len(overloaded) >= 2:
-
-    st.error(
-        "Multiple phases are overloaded. "
-        "Automatic transfer is blocked. Manual intervention required."
+recommendation_error = None
+try:
+    recommendation_response = requests.post(
+        f"{API_URL}/recommend_transfer",
+        json={
+            "current_loads": current_snapshot,
+            "predicted_loads": predicted_snapshot,
+            "ambient_temp": float(ambient_temp),
+            "excluded_targets": st.session_state.rejected_transfer_targets,
+        },
+        timeout=(0.4, 0.8),
     )
+    recommendation_response.raise_for_status()
+    recommendation = recommendation_response.json()
+except requests.exceptions.RequestException as exc:
+    recommendation_error = str(exc)
 
-elif len(overloaded) == 1:
+if recommendation_error:
+    st.error("Could not obtain a transfer recommendation from Flask. " + recommendation_error)
+elif recommendation:
+    if recommendation.get("recommended"):
+        source = recommendation["source"]
+        destination = recommendation["destination"]
+        amount = float(recommendation["amount_a"])
+        st.markdown("### Recommended action")
+        status_col, route_col, amount_col = st.columns(3)
+        with status_col:
+            st.metric("Source phase", f"Phase {source}")
+        with route_col:
+            st.metric("Destination phase", f"Phase {destination}")
+        with amount_col:
+            st.metric("Recommended transfer", f"{amount:.1f} A")
 
-    source = overloaded[0]
-    source_current = current_snapshot[source]
-
-    excess_load = source_current - MAX_CURRENT
-
-    candidates = []
-
-    for target in ["R", "Y", "B"]:
-
-        if target == source:
-            continue
-
-        target_current = current_snapshot[target]
-
-        available_capacity = MAX_CURRENT - target_current
-
-        if available_capacity <= 0:
-            continue
-
-        ideal_transfer = (source_current - target_current) / 2
-
-        amount = min(
-            excess_load,
-            available_capacity,
-            ideal_transfer
+        before = recommendation["before"]
+        after = recommendation["after"]
+        st.markdown("**Projected effect of the proposed transfer**")
+        comparison_rows = []
+        for p in ("R", "Y", "B"):
+            comparison_rows.append({
+                "Phase": p,
+                "Present before (A)": round(before["current"][p], 1),
+                "Present after (A)": round(after["current"][p], 1),
+                "Predicted before (A)": round(before["predicted"][p], 1),
+                "Predicted after (A)": round(after["predicted"][p], 1),
+            })
+        st.dataframe(comparison_rows, hide_index=True, width="stretch")
+        st.caption(
+            f"Worst present/predicted thermal index in the evaluated pair: "
+            f"{recommendation['score_before']:.1f}% before → "
+            f"{recommendation['score_after']:.1f}% after. This is an illustrative model index."
         )
 
-        if amount <= 0:
-            continue
+        reason_transfer_col, reason_no_transfer_col = st.columns(2)
+        with reason_transfer_col:
+            st.markdown("#### ✅ Why transfer?")
+            st.info(recommendation["reason_transfer"])
+        with reason_no_transfer_col:
+            st.markdown("#### ⛔ Why not transfer?")
+            st.warning(recommendation["reason_no_transfer"])
 
-        source_after = source_current - amount
-        target_after = target_current + amount
-
-        score = (
-            max(source_after, target_after),
-            abs(source_after - target_after)
-        )
-
-        candidates.append({
-            "source": source,
-            "destination": target,
-            "amount": round(amount, 2),
-            "source_before": source_current,
-            "destination_before": target_current,
-            "source_after": round(source_after, 2),
-            "destination_after": round(target_after, 2),
-            "score": score
-        })
-
-    if candidates:
-
-        recommendation = min(
-            candidates,
-            key=lambda x: x["score"]
-        )
-
-        st.error(f"⚠️ Phase {source} is OVERLOADED!")
-
-        st.subheader("🤖 AI Algorithm Recommendation")
-
-        st.success(
-            f"Transfer {recommendation['amount']:.2f} A "
-            f"from Phase {source} to Phase "
-            f"{recommendation['destination']}."
-        )
-
-        st.write("### Before and After (Projected)")
-
-        before_col, after_col = st.columns(2)
-
-        with before_col:
-            st.write("**Before Transfer**")
-            st.write(
-                f"{source}: {recommendation['source_before']:.2f} A"
-            )
-            st.write(
-                f"{recommendation['destination']}: "
-                f"{recommendation['destination_before']:.2f} A"
-            )
-
-        with after_col:
-            st.write("**After Transfer**")
-            st.write(
-                f"{source}: {recommendation['source_after']:.2f} A"
-            )
-            st.write(
-                f"{recommendation['destination']}: "
-                f"{recommendation['destination_after']:.2f} A"
-            )
-
-        st.info(
-            "Review the recommendation and confirm to apply "
-            "the transfer in the simulation."
-        )
-
-        # STEP 3: Execute transfer only after confirmation
-
-        def apply_transfer(source, destination, amount):
-
-            source_now = float(
-                st.session_state[phase_keys[source]]
-            )
-
-            destination_now = float(
-                st.session_state[phase_keys[destination]]
-            )
-
-            # Recheck conditions before execution
-            if source_now <= MAX_CURRENT:
+        def approve_recommended_transfer():
+            rec = st.session_state.get("active_transfer_recommendation")
+            if not rec or not rec.get("recommended"):
+                st.session_state.transfer_decision_message = "No active recommendation to approve."
                 return
-
-            if destination_now + amount > MAX_CURRENT:
+            src = rec["source"]
+            dst = rec["destination"]
+            amt = float(rec["amount_a"])
+            src_key, dst_key = phase_keys[src], phase_keys[dst]
+            source_before = float(st.session_state[src_key])
+            destination_before = float(st.session_state[dst_key])
+            if amt <= 0 or amt > source_before or destination_before + amt > 200:
+                st.session_state.transfer_decision_message = (
+                    "The recommendation no longer fits the current simulated readings. "
+                    "Please review the updated recommendation."
+                )
                 return
-
-            if amount > source_now - MAX_CURRENT:
-                return
-
-            # Actual simulation update
-            st.session_state[phase_keys[source]] = round(
-                source_now - amount
-            )
-
-            st.session_state[phase_keys[destination]] = round(
-                destination_now + amount
-            )
-
+            st.session_state[src_key] = int(round(source_before - amt))
+            st.session_state[dst_key] = int(round(destination_before + amt))
             st.session_state.last_transfer = {
-                "source": source,
-                "destination": destination,
-                "amount": amount,
-                "source_before": source_now,
-                "destination_before": destination_now,
-                "source_after": source_now - amount,
-                "destination_after": destination_now + amount
+                "source": src,
+                "destination": dst,
+                "amount": amt,
+                "source_before": source_before,
+                "destination_before": destination_before,
+                "source_after": source_before - amt,
+                "destination_after": destination_before + amt,
             }
-
-        st.button(
-            "⚡ CONFIRM & TRANSFER LOAD",
-            type="primary",
-            width="stretch",
-            on_click=apply_transfer,
-            args=(
-                recommendation["source"],
-                recommendation["destination"],
-                recommendation["amount"]
+            st.session_state.rejected_transfer_targets = []
+            st.session_state.transfer_decision_message = (
+                f"Approved simulated transfer: {amt:.1f} A from Phase {src} to Phase {dst}."
             )
-        )
 
+        def reject_recommended_transfer():
+            rec = st.session_state.get("active_transfer_recommendation")
+            if rec and rec.get("recommended"):
+                rejected = list(st.session_state.get("rejected_transfer_targets", []))
+                if rec["destination"] not in rejected:
+                    rejected.append(rec["destination"])
+                st.session_state.rejected_transfer_targets = rejected
+                st.session_state.transfer_decision_message = (
+                    f"Transfer to Phase {rec['destination']} declined. Currents remain unchanged; "
+                    "the algorithm will evaluate the other destination."
+                )
+
+        st.session_state.active_transfer_recommendation = recommendation
+        approve_col, reject_col = st.columns(2)
+        with approve_col:
+            st.button(
+                "✅ Approve simulated transfer",
+                type="primary",
+                width="stretch",
+                on_click=approve_recommended_transfer,
+                key="approve_recommended_transfer_button",
+            )
+        with reject_col:
+            st.button(
+                "✋ Do not transfer",
+                width="stretch",
+                on_click=reject_recommended_transfer,
+                key="reject_recommended_transfer_button",
+            )
     else:
+        st.warning("NO TRANSFER RECOMMENDED")
+        st.write(recommendation.get("reason_no_transfer", "No transfer is recommended."))
+        st.markdown("#### Why not transfer?")
+        st.info(recommendation.get("reason_no_transfer", "No additional explanation available."))
+        if recommendation.get("status") == "NO_SAFE_TRANSFER_AVAILABLE":
+            st.error("NO SAFE TRANSFER AVAILABLE under the configured demo constraints.")
+        if st.session_state.rejected_transfer_targets:
+            st.caption(
+                "Previously declined destination(s): "
+                + ", ".join(st.session_state.rejected_transfer_targets)
+            )
 
-        st.error(
-            "No suitable destination phase has enough available capacity. "
-            "Manual intervention required."
-        )
-
-elif len(warning) > 0:
-
-    st.warning(
-        f"Phase(s) {warning} are approaching the demo current limit."
-    )
-
-else:
-
-    st.success(
-        "All phases are within the configured 75 A demo current limit."
-    )
-
-st.caption(
-    "75 A is an illustrative software threshold, not a validated "
-    "transformer or conductor rating."
-)
+if st.session_state.transfer_decision_message:
+    st.success(st.session_state.transfer_decision_message)
 
 if "last_transfer" in st.session_state:
     event = st.session_state.last_transfer
     st.success(
-        f"Last transfer: {event['amount']:.1f} A moved from Phase {event['source']} "
-        f"to Phase {event['destination']}."
+        f"Last approved simulated transfer: {event['amount']:.1f} A moved from "
+        f"Phase {event['source']} to Phase {event['destination']}."
     )
     before_col, after_col = st.columns(2)
     with before_col:
@@ -641,10 +545,12 @@ if "last_transfer" in st.session_state:
         st.markdown("**After transfer**")
         st.write(f"Phase {event['source']}: {event['source_after']:.1f} A")
         st.write(f"Phase {event['destination']}: {event['destination_after']:.1f} A")
-    st.metric("Total current across the three simulated phases", f"{sum(current_snapshot.values()):.1f} A",
-              help="The transfer shifts the same amount between phases; the sum remains unchanged.")
+    st.metric(
+        "Total current across the three simulated phases",
+        f"{sum(current_snapshot.values()):.1f} A",
+        help="The transfer shifts the same amount between phases; the sum remains unchanged."
+    )
 
-    # A clear animated schematic of the transfer action for the judges' demo.
     st.subheader("Transfer movement")
     phase_x = {"R": 0, "Y": 1, "B": 2}
     sx, dx = phase_x[event["source"]], phase_x[event["destination"]]
@@ -688,7 +594,7 @@ if "last_transfer" in st.session_state:
                                "transition": {"duration": 0}, "fromcurrent": True}])])]
     )
     st.plotly_chart(transfer_fig, width="stretch", config={"displaylogo": False})
-    st.caption("The animation illustrates the selected simulated transfer. The 3D feeder flow remains a separate continuous visualization.")
+    st.caption("The animation illustrates the approved simulated transfer. No physical switchgear is controlled.")
 
 # Compatibility values for the existing primary/standby schematic below.
 primary_before = float(monitored_current)
@@ -817,30 +723,6 @@ def add_box(x0, x1, y0, y1, z0, z1, color, name, opacity=1.0, line_color=None):
         **({"contour": {"show": False}} if False else {})
     ))
 
-
-
-def add_cylinder(x, y, z0, z1, radius, color, name, sides=10):
-    """Lightweight vertical cylinder mesh for bushings, gauges and pipe fittings."""
-    vertices = []
-    for z in (z0, z1):
-        for n in range(sides):
-            angle = 2 * math.pi * n / sides
-            vertices.append((x + radius * math.cos(angle), y + radius * math.sin(angle), z))
-    faces_i, faces_j, faces_k = [], [], []
-    for n in range(sides):
-        nxt = (n + 1) % sides
-        faces_i.extend([n, n, sides + n, 0])
-        faces_j.extend([nxt, sides + nxt, sides + nxt, nxt])
-        faces_k.extend([sides + nxt, sides + n, n, sides])
-    fig.add_trace(go.Mesh3d(
-        x=[v[0] for v in vertices], y=[v[1] for v in vertices], z=[v[2] for v in vertices],
-        i=faces_i, j=faces_j, k=faces_k, color=color, name=name,
-        showscale=False, flatshading=False,
-        lighting=dict(ambient=0.68, diffuse=0.72, specular=0.35, roughness=0.45),
-        hovertemplate=f"<b>{name}</b><extra></extra>"
-    ))
-
-
 def add_line(points, color, name, width=6, dash="solid", opacity=1.0):
     fig.add_trace(go.Scatter3d(
         x=[p[0] for p in points], y=[p[1] for p in points], z=[p[2] for p in points],
@@ -886,10 +768,7 @@ for x in [-5.8, -4.9]:
     add_box(x, x+0.12, -0.25, -0.13, 0.0, 3.0, "#7A8795", "Incoming line gantry")
 add_box(-5.95, -4.75, -0.28, -0.10, 2.85, 3.0, "#64748B", "Gantry crossbar")
 for y, c, p in [(-0.18,"#E84A4A","R"),(0.0,"#F2C744","Y"),(0.18,"#3485E8","B")]:
-    add_line([(-6.5,y,3.2),(-5.35,y,3.2),(-4.5,y,2.9)], c, f"Incoming {p} ACSR conductor core", 5)
-    for strand_offset in (-0.035, 0.035):
-        add_line([(-6.5,y+strand_offset,3.2),(-5.35,y+strand_offset,3.2),(-4.5,y+strand_offset,2.9)],
-                 "#CBD5DF", f"Incoming {p} ACSR outer strand", 1.5, opacity=0.9)
+    add_line([(-6.5,y,3.2),(-5.35,y,3.2),(-4.5,y,2.9)], c, f"Incoming {p} conductor", 5)
     add_marker(-5.35,y,3.2,c,f"{p} incoming terminal",5)
 add_label(-5.8, -1.0, 3.55, "INCOMING SUPPLY", size=10)
 
@@ -904,14 +783,6 @@ add_label(-3.65, -4.15, 2.55, "MAIN BUSBAR", size=9)
 add_line([(-4.15,0,2.0),(-3.8,0,2.0)], "#B87333", "Breaker to busbar", 10)
 
 # ---------- Three transformer bays ----------
-# Virtual transformer tank colour follows the calculated thermal state.
-if thermal["status"] == "NORMAL":
-    twin_tank_color = "#4F9D78"
-elif thermal["status"] == "WARNING / TRANSFER":
-    twin_tank_color = "#D69E36"
-else:
-    twin_tank_color = "#C65353"
-
 transformers = [
     {"name":"TR-A", "x":-2.2, "y":-2.45, "load":"LOAD BANK A", "loadx":5.1, "loady":-2.5},
     {"name":"TR-B", "x":-2.2, "y":0.0, "load":"LOAD BANK B", "loadx":5.1, "loady":0.0},
@@ -921,31 +792,19 @@ for tr in transformers:
     x, y, name = tr["x"], tr["y"], tr["name"]
     # Bay foundation
     add_box(x-0.85,x+1.35,y-0.9,y+0.9,0.0,0.13,"#BFC8D2",f"{name} foundation")
-    # Main oil tank, raised lid and front nameplate
-    add_box(x-0.55,x+0.75,y-0.62,y+0.62,0.15,1.75,twin_tank_color,f"{name} transformer tank · {thermal['status']}")
+    # Transformer tank and lid
+    add_box(x-0.55,x+0.75,y-0.62,y+0.62,0.15,1.75,"#7C8C9C",f"{name} transformer tank")
     add_box(x-0.48,x+0.68,y-0.56,y+0.56,1.75,1.92,"#A9B5C1",f"{name} transformer lid")
-    add_box(x-0.25,x+0.42,y-0.635,y-0.615,0.72,1.05,"#E8EDF2",f"{name} identification plate")
-    # Conservator tank and its connecting oil pipe
-    add_box(x-0.28,x+0.48,y+0.18,y+0.52,2.25,2.55,"#8799A8",f"{name} conservator oil tank")
-    add_line([(x+0.42,y+0.30,2.25),(x+0.62,y+0.30,2.12),(x+0.62,y+0.30,1.88)], "#B7C3CC", f"{name} oil pipe", 5)
-    # Oil level / temperature gauge details
-    add_cylinder(x+0.52,y-0.35,1.92,2.12,0.075,"#E6B85C",f"{name} oil gauge", sides=8)
-    add_marker(x+0.52,y-0.35,2.14,"#263747",f"{name} gauge pointer",3)
     # Cooling fins on both sides
     for i in range(5):
         xx = x - 0.42 + i*0.22
         add_box(xx,xx+0.07,y-0.78,y-0.64,0.35,1.55,"#526779",f"{name} cooling fin")
         add_box(xx,xx+0.07,y+0.64,y+0.78,0.35,1.55,"#526779",f"{name} cooling fin")
-    # Three porcelain-style ribbed bushings with metallic terminal caps
+    # Three bushings/terminals
     for j, (phase, color, current) in enumerate(phase_data):
         yy = y - 0.34 + j*0.34
-        add_cylinder(x+0.20,yy,1.92,2.02,0.105,"#D9E0E6",f"{name} {phase} bushing base")
-        for rib in range(4):
-            z_rib = 2.03 + rib*0.075
-            add_cylinder(x+0.20,yy,z_rib,z_rib+0.035,0.105 if rib in (0,3) else 0.085,
-                         "#E8EDF1",f"{name} {phase} porcelain insulator rib", sides=8)
-        add_cylinder(x+0.20,yy,2.34,2.47,0.045,"#B9C4CE",f"{name} {phase} terminal stud", sides=8)
-        add_marker(x+0.20,yy,2.48,color,f"{name} {phase} terminal",5)
+        add_box(x+0.12,x+0.28,yy-0.09,yy+0.09,1.92,2.35,color,f"{name} {phase} bushing")
+        add_marker(x+0.20,yy,2.4,color,f"{name} {phase} terminal",5)
     # label above the unit
     add_label(x+0.05,y,3.05,name,size=10)
     # connection from busbar to transformer
@@ -980,9 +839,9 @@ add_label(-4.85,-3.05,1.42,"MONITOR",size=9)
 
 
 
-# ---------- Animated current-flow particles ----------
-# Visual particles illustrate simulated current direction from each transformer
-# feeder toward its load bank. This is an illustrative software animation.
+# ---------- Lightweight animated current-flow particles ----------
+# Keep the 3D substation geometry, but use fewer particles/traces/frames
+# to reduce browser rendering load on lower-spec laptops.
 flow_paths = []
 for tr in transformers:
     x, y = tr["x"], tr["y"]
@@ -1018,40 +877,27 @@ def point_along_path(path, fraction):
         walked += length
     return path[-1]
 
-# Two marker layers per phase: a soft halo and a bright core make the motion
-# easier to see against the feeder wires.
 particle_trace_indices = []
-particle_count = 3
-frame_count = 36
+particle_count = 2
+frame_count = 24
+
 for phase, color, current, path, transformer_name in flow_paths:
     initial_points = [point_along_path(path, pidx / particle_count) for pidx in range(particle_count)]
-    halo_idx = len(fig.data)
-    particle_trace_indices.extend([halo_idx, halo_idx + 1])
-    halo_size = max(8, min(12, 7 + current / 45))
-    core_size = max(3, min(4.5, 2.5 + current / 100))
+    trace_idx = len(fig.data)
+    particle_trace_indices.append(trace_idx)
     fig.add_trace(go.Scatter3d(
         x=[pt[0] for pt in initial_points],
         y=[pt[1] for pt in initial_points],
-        z=[pt[2] + 0.025 for pt in initial_points],
+        z=[pt[2] + 0.03 for pt in initial_points],
         mode="markers",
-        marker=dict(size=halo_size, color=color, opacity=0.22, line=dict(width=0)),
-        name=f"{transformer_name} {phase} flow glow",
-        showlegend=False, hoverinfo="skip",
-    ))
-    fig.add_trace(go.Scatter3d(
-        x=[pt[0] for pt in initial_points],
-        y=[pt[1] for pt in initial_points],
-        z=[pt[2] + 0.035 for pt in initial_points],
-        mode="markers",
-        marker=dict(size=core_size, color=color, opacity=1.0,
-                    line=dict(color="#FFFFFF", width=0.7)),
+        marker=dict(size=4, color=color, opacity=0.95,
+                    line=dict(color="#FFFFFF", width=0.4)),
         name=f"{transformer_name} {phase} current flow",
         showlegend=False,
-        hovertemplate=f"<b>{transformer_name} · Phase {phase}</b><br>Simulated current: {current:.1f} A<br>Direction: transformer → load bank<extra></extra>",
+        hovertemplate=f"<b>{transformer_name} · Phase {phase}</b><br>Simulated current: {current:.1f} A<extra></extra>",
     ))
 
-# If a transfer has been performed, add a visible green marker to the 3D
-# standby/tie feeder. This is a visual simulation of the selected transfer path.
+# Optional green marker showing the approved simulated transfer.
 transfer_3d_trace_index = None
 transfer_3d_start_x = None
 transfer_3d_end_x = None
@@ -1065,8 +911,8 @@ if "last_transfer" in st.session_state:
     fig.add_trace(go.Scatter3d(
         x=[transfer_start[0]], y=[transfer_start[1]], z=[transfer_start[2]],
         mode="markers",
-        marker=dict(size=9, color="#10B981", opacity=1.0,
-                    line=dict(color="#FFFFFF", width=1.5)),
+        marker=dict(size=8, color="#10B981", opacity=1.0,
+                    line=dict(color="#FFFFFF", width=1)),
         name="Simulated transferred load",
         showlegend=False,
         hovertemplate=(
@@ -1081,24 +927,17 @@ animation_frames = []
 for frame_idx in range(frame_count):
     frame_data = []
     for phase, color, current, path, transformer_name in flow_paths:
-        # Faster current gives a slightly faster particle flow in this demo.
         speed = 0.55 + (max(0.0, current) / 200.0) * 0.9
         points = [
             point_along_path(path, pidx / particle_count + frame_idx * speed / frame_count)
             for pidx in range(particle_count)
         ]
-        # Both layers receive identical coordinates to preserve the glow effect.
         frame_data.append(go.Scatter3d(
-            x=[pt[0] for pt in points], y=[pt[1] for pt in points],
-            z=[pt[2] + 0.025 for pt in points],
-        ))
-        frame_data.append(go.Scatter3d(
-            x=[pt[0] for pt in points], y=[pt[1] for pt in points],
-            z=[pt[2] + 0.035 for pt in points],
+            x=[pt[0] for pt in points],
+            y=[pt[1] for pt in points],
+            z=[pt[2] + 0.03 for pt in points],
         ))
 
-    # Move the green transfer marker along the tie feeder between the selected
-    # phases. The existing current-flow particles continue animating as before.
     if transfer_3d_trace_index is not None:
         fraction = frame_idx / max(frame_count - 1, 1)
         transfer_x = transfer_3d_start_x + (transfer_3d_end_x - transfer_3d_start_x) * fraction
@@ -1106,13 +945,15 @@ for frame_idx in range(frame_count):
             x=[transfer_x], y=[-3.65], z=[0.62]
         ))
 
-    animation_frames.append(go.Frame(name=str(frame_idx), data=frame_data, traces=particle_trace_indices))
+    animation_frames.append(go.Frame(
+        name=str(frame_idx), data=frame_data, traces=particle_trace_indices
+    ))
 
 fig.frames = animation_frames
 
 # ---------- Plot styling ----------
 fig.update_layout(
-    height=680,
+    height=700,
     margin=dict(l=0, r=0, t=20, b=20),
     paper_bgcolor="#F8FAFC",
     plot_bgcolor="#F8FAFC",
@@ -1131,7 +972,7 @@ fig.update_layout(
 )
 
 st.subheader("Interactive 3D Substation Model")
-st.caption("The transformer tank colour follows the calculated thermal state; phase inputs drive feeder-flow indicators. Press PLAY for a lightweight illustrative flow animation. Drag to rotate • Scroll to zoom.")
+st.caption("Current-flow animation: press PLAY to keep particles moving continuously; press PAUSE to stop them. Smaller glowing particles show simulated flow from transformer to load bank. Drag to rotate • Scroll to zoom.")
 
 # Render Plotly in an HTML component so JavaScript can keep cycling through
 # animation frames until the user explicitly presses Pause. Native Plotly
@@ -1142,7 +983,7 @@ const gd = document.getElementById('{plot_id}');
 let frameIndex = 0;
 let isPlaying = false;
 let timerId = null;
-const totalFrames = 36;
+const totalFrames = 24;
 function playCurrentFlow() {
   if (isPlaying) return;
   isPlaying = true;
@@ -1154,12 +995,12 @@ function playCurrentFlow() {
     if (!isPlaying) return;
     Plotly.animate(gd, [String(frameIndex)], {
       mode: 'immediate',
-      frame: {duration: 120, redraw: false},
+      frame: {duration: 90, redraw: true},
       transition: {duration: 0}
     }).then(() => {
       frameIndex = (frameIndex + 1) % totalFrames;
-      if (isPlaying) timerId = setTimeout(step, 0);
-    }).catch(() => { if (isPlaying) timerId = setTimeout(step, 50); });
+      if (isPlaying) timerId = setTimeout(step, 35);
+    }).catch(() => { if (isPlaying) timerId = setTimeout(step, 100); });
   };
   step();
 }
@@ -1178,7 +1019,7 @@ document.getElementById('gt-pause').addEventListener('click', pauseCurrentFlow);
 plot_html = fig.to_html(
     full_html=False,
     include_plotlyjs="cdn",
-    config={"displaylogo": False, "scrollZoom": True, "responsive": True},
+    config={"displaylogo": False, "scrollZoom": True, "responsive": True, "staticPlot": False},
     div_id=plot_id,
     post_script=post_script,
 )
@@ -1201,7 +1042,7 @@ controls_html = r"""
 """
 st.components.v1.html(
     f"<!doctype html><html><head><meta charset='utf-8'></head><body style='margin:0;background:#f8fafc'>{controls_html}{plot_html}</body></html>",
-    height=710,
+    height=730,
     scrolling=False,
 )
 # ---------- Monitoring panels ----------

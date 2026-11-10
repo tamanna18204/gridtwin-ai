@@ -17,7 +17,7 @@ st.markdown("""
 <style>
 .block-container {padding-top: 1.2rem; padding-bottom: 2rem;}
 div[data-testid="stMetric"] {
-    background: rgba(120, 145, 170, 0.10);
+    background: rgba(30, 41, 59, 0.65);
     border: 1px solid rgba(120, 145, 170, 0.28);
     padding: 12px 14px;
     border-radius: 12px;
@@ -76,7 +76,7 @@ except requests.exceptions.RequestException as e:
     st.sidebar.caption(str(e))
     
 show_labels = st.sidebar.checkbox("Show equipment labels", value=True)
-show_grid = st.sidebar.checkbox("Show ground grid", value=False)
+show_grid = st.sidebar.checkbox("Show ground grid", value=True)
 
 phase_data = [
     ("R", "#E84A4A", current_r),
@@ -185,7 +185,7 @@ st.subheader("⚠️ Predicted Overload Warning")
 
 # Illustrative demo threshold only.
 # Replace with validated equipment-specific ratings when available.
-DEMO_CURRENT_THRESHOLD = 100.0  # Amperes
+DEMO_CURRENT_THRESHOLD = 75.0  # Illustrative demo value; not an equipment rating
 
 st.caption(
     f"Illustrative demo threshold: {DEMO_CURRENT_THRESHOLD:.1f} A per phase. "
@@ -438,19 +438,30 @@ elif recommendation:
                 "Predicted after (A)": round(after["predicted"][p], 1),
             })
         st.dataframe(comparison_rows, hide_index=True, width="stretch")
+        score_before = float(recommendation.get("score_before", 0.0))
+        score_after = float(recommendation.get("score_after", score_before))
         st.caption(
-            f"Worst present/predicted thermal index in the evaluated pair: "
-            f"{recommendation['score_before']:.1f}% before → "
-            f"{recommendation['score_after']:.1f}% after. This is an illustrative model index."
+            f"Phase-balance score: {score_before:.1f}% before → "
+            f"{score_after:.1f}% after. This is an illustrative model index, "
+            "not an electrical safety rating."
         )
 
         reason_transfer_col, reason_no_transfer_col = st.columns(2)
         with reason_transfer_col:
             st.markdown("#### ✅ Why transfer?")
-            st.info(recommendation["reason_transfer"])
+            st.info(
+                f"Phase {source} is predicted at "
+                f"{before['predicted'][source]:.1f} A, above the "
+                f"{DEMO_CURRENT_THRESHOLD:.1f} A illustrative demo limit. "
+                f"The backend recommends shifting {amount:.1f} A to Phase {destination}."
+            )
         with reason_no_transfer_col:
-            st.markdown("#### ⛔ Why not transfer?")
-            st.warning(recommendation["reason_no_transfer"])
+            st.markdown("#### ⛔ If no transfer is made")
+            st.warning(
+                f"The predicted load on Phase {source} would remain at "
+                f"{before['predicted'][source]:.1f} A, above the illustrative "
+                f"{DEMO_CURRENT_THRESHOLD:.1f} A demo limit."
+            )
 
         def approve_recommended_transfer():
             rec = st.session_state.get("active_transfer_recommendation")
@@ -489,8 +500,9 @@ elif recommendation:
             rec = st.session_state.get("active_transfer_recommendation")
             if rec and rec.get("recommended"):
                 rejected = list(st.session_state.get("rejected_transfer_targets", []))
-                if rec["destination"] not in rejected:
-                    rejected.append(rec["destination"])
+                rejected_pair = [rec["source"], rec["destination"]]
+                if rejected_pair not in rejected:
+                    rejected.append(rejected_pair)
                 st.session_state.rejected_transfer_targets = rejected
                 st.session_state.transfer_decision_message = (
                     f"Transfer to Phase {rec['destination']} declined. Currents remain unchanged; "
@@ -516,15 +528,22 @@ elif recommendation:
             )
     else:
         st.warning("NO TRANSFER RECOMMENDED")
-        st.write(recommendation.get("reason_no_transfer", "No transfer is recommended."))
+        no_transfer_message = recommendation.get(
+            "message", "No transfer is recommended for the current simulated readings."
+        )
+        st.write(no_transfer_message)
         st.markdown("#### Why not transfer?")
-        st.info(recommendation.get("reason_no_transfer", "No additional explanation available."))
-        if recommendation.get("status") == "NO_SAFE_TRANSFER_AVAILABLE":
+        st.info(no_transfer_message)
+        if "No safe destination" in no_transfer_message or "No safe transfer" in no_transfer_message:
             st.error("NO SAFE TRANSFER AVAILABLE under the configured demo constraints.")
         if st.session_state.rejected_transfer_targets:
             st.caption(
                 "Previously declined destination(s): "
-                + ", ".join(st.session_state.rejected_transfer_targets)
+                + ", ".join(
+                    f"{pair[0]} → {pair[1]}"
+                    for pair in st.session_state.rejected_transfer_targets
+                    if isinstance(pair, (list, tuple)) and len(pair) >= 2
+                )
             )
 
 if st.session_state.transfer_decision_message:
@@ -752,35 +771,35 @@ def add_label(x, y, z, text, color="#243247", size=10):
         ))
 
 # ---------- Ground / site platform ----------
-add_box(-6.8, 8.0, -4.7, 4.7, -0.30, -0.05, "#D8DEE5", "Raised substation platform")
-add_box(-6.55, 7.75, -4.45, 4.45, -0.05, 0.0, "#EEF1F4", "Substation floor")
+add_box(-6.8, 8.0, -4.7, 4.7, -0.30, -0.05, "#111827", "Raised substation platform")
+add_box(-6.55, 7.75, -4.45, 4.45, -0.05, 0.0, "#080F1C", "Substation floor")
 
 # Floor grid as subtle guide lines
 if show_grid:
     for x in range(-6, 8, 1):
-        add_line([(x,-4.4,0.015),(x,4.4,0.015)], "#D1D8E0", "Ground guide", 1, opacity=0.6)
+        add_line([(x,-4.4,0.015),(x,4.4,0.015)], "#243247", "Ground guide", 1, opacity=0.55)
     for y in range(-4, 5, 1):
-        add_line([(-6.5,y,0.015),(7.7,y,0.015)], "#D1D8E0", "Ground guide", 1, opacity=0.6)
+        add_line([(-6.5,y,0.015),(7.7,y,0.015)], "#243247", "Ground guide", 1, opacity=0.55)
 
 # ---------- Incoming utility / substation ----------
 # Entry gantry poles and crossbar
 for x in [-5.8, -4.9]:
-    add_box(x, x+0.12, -0.25, -0.13, 0.0, 3.0, "#7A8795", "Incoming line gantry")
-add_box(-5.95, -4.75, -0.28, -0.10, 2.85, 3.0, "#64748B", "Gantry crossbar")
+    add_box(x, x+0.12, -0.25, -0.13, 0.0, 3.0, "#64748B", "Incoming line gantry")
+add_box(-5.95, -4.75, -0.28, -0.10, 2.85, 3.0, "#94A3B8", "Gantry crossbar")
 for y, c, p in [(-0.18,"#E84A4A","R"),(0.0,"#F2C744","Y"),(0.18,"#3485E8","B")]:
     add_line([(-6.5,y,3.2),(-5.35,y,3.2),(-4.5,y,2.9)], c, f"Incoming {p} conductor", 5)
     add_marker(-5.35,y,3.2,c,f"{p} incoming terminal",5)
 add_label(-5.8, -1.0, 3.55, "INCOMING SUPPLY", size=10)
 
 # Main incoming breaker / switchgear
-add_box(-4.8,-4.15,-0.65,0.65,0.05,1.15,"#D7A84B","Incoming circuit breaker")
-add_box(-4.72,-4.23,-0.50,0.50,1.15,1.32,"#F4D58D","Breaker cap")
+add_box(-4.8,-4.15,-0.65,0.65,0.05,1.15,"#334155","Incoming circuit breaker")
+add_box(-4.72,-4.23,-0.50,0.50,1.15,1.32,"#64748B","Breaker cap")
 add_label(-4.7,-1.0,1.55,"MAIN BREAKER",size=9)
 
 # Main busbar runs across the site
-add_box(-3.8, -3.55, -3.5, 3.5, 1.85, 2.05, "#B87333", "Main copper busbar")
+add_box(-3.8, -3.55, -3.5, 3.5, 1.85, 2.05, "#F59E0B", "Main copper busbar")
 add_label(-3.65, -4.15, 2.55, "MAIN BUSBAR", size=9)
-add_line([(-4.15,0,2.0),(-3.8,0,2.0)], "#B87333", "Breaker to busbar", 10)
+add_line([(-4.15,0,2.0),(-3.8,0,2.0)], "#F59E0B", "Breaker to busbar", 10)
 
 # ---------- Three transformer bays ----------
 transformers = [
@@ -793,13 +812,13 @@ for tr in transformers:
     # Bay foundation
     add_box(x-0.85,x+1.35,y-0.9,y+0.9,0.0,0.13,"#BFC8D2",f"{name} foundation")
     # Transformer tank and lid
-    add_box(x-0.55,x+0.75,y-0.62,y+0.62,0.15,1.75,"#7C8C9C",f"{name} transformer tank")
-    add_box(x-0.48,x+0.68,y-0.56,y+0.56,1.75,1.92,"#A9B5C1",f"{name} transformer lid")
+    add_box(x-0.55,x+0.75,y-0.62,y+0.62,0.15,1.75,"#263548",f"{name} transformer tank")
+    add_box(x-0.48,x+0.68,y-0.56,y+0.56,1.75,1.92,"#475569",f"{name} transformer lid")
     # Cooling fins on both sides
     for i in range(5):
         xx = x - 0.42 + i*0.22
-        add_box(xx,xx+0.07,y-0.78,y-0.64,0.35,1.55,"#526779",f"{name} cooling fin")
-        add_box(xx,xx+0.07,y+0.64,y+0.78,0.35,1.55,"#526779",f"{name} cooling fin")
+        add_box(xx,xx+0.07,y-0.78,y-0.64,0.35,1.55,"#64748B",f"{name} cooling fin")
+        add_box(xx,xx+0.07,y+0.64,y+0.78,0.35,1.55,"#64748B",f"{name} cooling fin")
     # Three bushings/terminals
     for j, (phase, color, current) in enumerate(phase_data):
         yy = y - 0.34 + j*0.34
@@ -810,7 +829,7 @@ for tr in transformers:
     # connection from busbar to transformer
     add_line([(-3.55,y,2.0),(x-0.75,y,2.0),(x-0.45,y,2.0)], "#B87333", f"{name} bus connection", 5)
     # small breaker block between transformer and feeders
-    add_box(x+1.05,x+1.42,y-0.35,y+0.35,0.18,0.85,"#64748B",f"{name} feeder breaker")
+    add_box(x+1.05,x+1.42,y-0.35,y+0.35,0.18,0.85,"#334155",f"{name} feeder breaker")
     add_box(x+1.12,x+1.35,y-0.20,y+0.20,0.85,0.98,"#82D4B5",f"{name} breaker handle")
     # Feeder phase wires extend to load bank, with a small raised routing point
     for j,(phase,color,current) in enumerate(phase_data):
@@ -829,12 +848,12 @@ for tr in transformers:
 
 # Standby / tie feeder along front edge
 add_line([(-1.1,-3.65,0.45),(1.0,-3.65,0.45),(3.3,-3.65,0.45),(5.4,-3.65,0.45)], "#8795A5", "Standby tie feeder", 4, "dash")
-add_box(1.0,1.38,-3.83,-3.47,0.35,0.72,"#A7B3C0","Standby isolator")
+add_box(1.0,1.38,-3.83,-3.47,0.35,0.72,"#10B981","Standby isolator")
 add_label(2.6,-4.2,0.75,"STANDBY FEEDER",size=9)
 
 # Small warning/monitoring panel at the front
-add_box(-5.7,-4.0,-3.9,-2.2,0.05,1.05,"#344256","Monitoring panel")
-add_box(-5.55,-4.15,-3.72,-2.38,1.05,1.12,"#DDE9F5","Monitoring panel screen")
+add_box(-5.7,-4.0,-3.9,-2.2,0.05,1.05,"#1E293B","Monitoring panel")
+add_box(-5.55,-4.15,-3.72,-2.38,1.05,1.12,"#0EA5E9","Monitoring panel screen")
 add_label(-4.85,-3.05,1.42,"MONITOR",size=9)
 
 
@@ -955,24 +974,24 @@ fig.frames = animation_frames
 fig.update_layout(
     height=700,
     margin=dict(l=0, r=0, t=20, b=20),
-    paper_bgcolor="#F8FAFC",
-    plot_bgcolor="#F8FAFC",
-    font=dict(family="Arial", color="#243247", size=11),
+    paper_bgcolor="#070B14",
+    plot_bgcolor="#070B14",
+    font=dict(family="Arial", color="#E2E8F0", size=11),
     showlegend=False,
     scene=dict(
-        bgcolor="#F8FAFC",
+        bgcolor="#080F1C",
         xaxis=dict(visible=False, range=[-7, 8], showbackground=False),
         yaxis=dict(visible=False, range=[-5, 5], showbackground=False),
         zaxis=dict(visible=False, range=[-0.5, 4], showbackground=False),
         aspectmode="manual",
-        aspectratio=dict(x=1.75, y=1.25, z=0.85),
-        camera=dict(eye=dict(x=1.8, y=2.0, z=1.4), projection=dict(type="orthographic")),
+        aspectratio=dict(x=1.75, y=1.15, z=0.42),
+        camera=dict(eye=dict(x=0.08, y=0.08, z=3.2), projection=dict(type="orthographic")),
         dragmode="orbit",
     ),
 )
 
 st.subheader("Interactive 3D Substation Model")
-st.caption("Current-flow animation: press PLAY to keep particles moving continuously; press PAUSE to stop them. Smaller glowing particles show simulated flow from transformer to load bank. Drag to rotate • Scroll to zoom.")
+st.caption("GRIDTWIN-3D • 33kV / 415V illustrative substation • Top-down engineering view. Press PLAY to animate phase-current particles; drag to rotate and scroll to zoom.")
 
 # Render Plotly in an HTML component so JavaScript can keep cycling through
 # animation frames until the user explicitly presses Pause. Native Plotly
@@ -1030,18 +1049,18 @@ controls_html = r"""
   <span class="gt-status"><span class="gt-dot"></span> SIMULATED CURRENT FLOW</span>
 </div>
 <style>
-  .gt-controls { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:12px; padding:14px 10px; font-family:Arial,sans-serif; background:#f8fafc; border-radius:14px 14px 0 0; }
+  .gt-controls { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:12px; padding:14px 10px; font-family:Arial,sans-serif; background:#070b14; border-radius:14px 14px 0 0; }
   .gt-button { border:1px solid #cbd5e1; border-radius:10px; padding:12px 18px; font-size:13px; font-weight:700; letter-spacing:.3px; cursor:pointer; transition:all .18s ease; box-shadow:0 2px 5px rgba(15,23,42,.08); }
   .gt-play { color:#fff; background:linear-gradient(135deg,#0f766e,#0891b2); border-color:#0e7490; }
-  .gt-pause { color:#334155; background:#fff; }
+  .gt-pause { color:#334155; background:#1e293b; color:#e2e8f0; }
   .gt-button:hover { transform:translateY(-1px); box-shadow:0 4px 10px rgba(15,23,42,.15); }
   .gt-button.active { outline:2px solid #7dd3fc; outline-offset:2px; }
-  .gt-status { display:flex; align-items:center; gap:7px; font-size:10px; font-weight:700; color:#64748b; letter-spacing:.8px; }
+  .gt-status { display:flex; align-items:center; gap:7px; font-size:10px; font-weight:700; color:#cbd5e1; letter-spacing:.8px; }
   .gt-dot { width:8px; height:8px; border-radius:50%; background:#10b981; box-shadow:0 0 0 4px #d1fae5; }
 </style>
 """
 st.components.v1.html(
-    f"<!doctype html><html><head><meta charset='utf-8'></head><body style='margin:0;background:#f8fafc'>{controls_html}{plot_html}</body></html>",
+    f"<!doctype html><html><head><meta charset='utf-8'></head><body style='margin:0;background:#070b14'>{controls_html}{plot_html}</body></html>",
     height=730,
     scrolling=False,
 )

@@ -59,7 +59,7 @@ try:
             "B": current_b,
             "ambient_temp": ambient_temp
         },
-        timeout=(0.4, 0.8)
+        timeout=5
     )
 
     response.raise_for_status()
@@ -87,11 +87,12 @@ avg = (current_r + current_y + current_b) / 3
 # ---------- AI LOAD PREDICTION ----------
 st.header("AI-Based Next Load Prediction")
 st.caption("Prediction horizon: next model step")
-@st.cache_data(show_spinner=False)
-def cached_prediction(r, y, b, ambient):
-    return predict_next_load(r, y, b, ambient)
-
-predictions = cached_prediction(current_r, current_y, current_b, ambient_temp)
+predictions = predict_next_load(
+    current_r,
+    current_y,
+    current_b,
+    ambient_temp
+)
 
 col1, col2, col3 = st.columns(3)
 
@@ -402,7 +403,7 @@ try:
             "ambient_temp": float(ambient_temp),
             "excluded_targets": st.session_state.rejected_transfer_targets,
         },
-        timeout=(0.4, 0.8),
+        timeout=5,
     )
     recommendation_response.raise_for_status()
     recommendation = recommendation_response.json()
@@ -839,9 +840,9 @@ add_label(-4.85,-3.05,1.42,"MONITOR",size=9)
 
 
 
-# ---------- Lightweight animated current-flow particles ----------
-# Keep the 3D substation geometry, but use fewer particles/traces/frames
-# to reduce browser rendering load on lower-spec laptops.
+# ---------- Animated current-flow particles ----------
+# Visual particles illustrate simulated current direction from each transformer
+# feeder toward its load bank. This is an illustrative software animation.
 flow_paths = []
 for tr in transformers:
     x, y = tr["x"], tr["y"]
@@ -877,27 +878,40 @@ def point_along_path(path, fraction):
         walked += length
     return path[-1]
 
+# Two marker layers per phase: a soft halo and a bright core make the motion
+# easier to see against the feeder wires.
 particle_trace_indices = []
-particle_count = 2
-frame_count = 24
-
+particle_count = 5
+frame_count = 120
 for phase, color, current, path, transformer_name in flow_paths:
     initial_points = [point_along_path(path, pidx / particle_count) for pidx in range(particle_count)]
-    trace_idx = len(fig.data)
-    particle_trace_indices.append(trace_idx)
+    halo_idx = len(fig.data)
+    particle_trace_indices.extend([halo_idx, halo_idx + 1])
+    halo_size = max(8, min(12, 7 + current / 45))
+    core_size = max(3, min(4.5, 2.5 + current / 100))
     fig.add_trace(go.Scatter3d(
         x=[pt[0] for pt in initial_points],
         y=[pt[1] for pt in initial_points],
-        z=[pt[2] + 0.03 for pt in initial_points],
+        z=[pt[2] + 0.025 for pt in initial_points],
         mode="markers",
-        marker=dict(size=4, color=color, opacity=0.95,
-                    line=dict(color="#FFFFFF", width=0.4)),
+        marker=dict(size=halo_size, color=color, opacity=0.22, line=dict(width=0)),
+        name=f"{transformer_name} {phase} flow glow",
+        showlegend=False, hoverinfo="skip",
+    ))
+    fig.add_trace(go.Scatter3d(
+        x=[pt[0] for pt in initial_points],
+        y=[pt[1] for pt in initial_points],
+        z=[pt[2] + 0.035 for pt in initial_points],
+        mode="markers",
+        marker=dict(size=core_size, color=color, opacity=1.0,
+                    line=dict(color="#FFFFFF", width=0.7)),
         name=f"{transformer_name} {phase} current flow",
         showlegend=False,
-        hovertemplate=f"<b>{transformer_name} · Phase {phase}</b><br>Simulated current: {current:.1f} A<extra></extra>",
+        hovertemplate=f"<b>{transformer_name} · Phase {phase}</b><br>Simulated current: {current:.1f} A<br>Direction: transformer → load bank<extra></extra>",
     ))
 
-# Optional green marker showing the approved simulated transfer.
+# If a transfer has been performed, add a visible green marker to the 3D
+# standby/tie feeder. This is a visual simulation of the selected transfer path.
 transfer_3d_trace_index = None
 transfer_3d_start_x = None
 transfer_3d_end_x = None
@@ -911,8 +925,8 @@ if "last_transfer" in st.session_state:
     fig.add_trace(go.Scatter3d(
         x=[transfer_start[0]], y=[transfer_start[1]], z=[transfer_start[2]],
         mode="markers",
-        marker=dict(size=8, color="#10B981", opacity=1.0,
-                    line=dict(color="#FFFFFF", width=1)),
+        marker=dict(size=9, color="#10B981", opacity=1.0,
+                    line=dict(color="#FFFFFF", width=1.5)),
         name="Simulated transferred load",
         showlegend=False,
         hovertemplate=(
@@ -927,17 +941,24 @@ animation_frames = []
 for frame_idx in range(frame_count):
     frame_data = []
     for phase, color, current, path, transformer_name in flow_paths:
+        # Faster current gives a slightly faster particle flow in this demo.
         speed = 0.55 + (max(0.0, current) / 200.0) * 0.9
         points = [
             point_along_path(path, pidx / particle_count + frame_idx * speed / frame_count)
             for pidx in range(particle_count)
         ]
+        # Both layers receive identical coordinates to preserve the glow effect.
         frame_data.append(go.Scatter3d(
-            x=[pt[0] for pt in points],
-            y=[pt[1] for pt in points],
-            z=[pt[2] + 0.03 for pt in points],
+            x=[pt[0] for pt in points], y=[pt[1] for pt in points],
+            z=[pt[2] + 0.025 for pt in points],
+        ))
+        frame_data.append(go.Scatter3d(
+            x=[pt[0] for pt in points], y=[pt[1] for pt in points],
+            z=[pt[2] + 0.035 for pt in points],
         ))
 
+    # Move the green transfer marker along the tie feeder between the selected
+    # phases. The existing current-flow particles continue animating as before.
     if transfer_3d_trace_index is not None:
         fraction = frame_idx / max(frame_count - 1, 1)
         transfer_x = transfer_3d_start_x + (transfer_3d_end_x - transfer_3d_start_x) * fraction
@@ -945,15 +966,13 @@ for frame_idx in range(frame_count):
             x=[transfer_x], y=[-3.65], z=[0.62]
         ))
 
-    animation_frames.append(go.Frame(
-        name=str(frame_idx), data=frame_data, traces=particle_trace_indices
-    ))
+    animation_frames.append(go.Frame(name=str(frame_idx), data=frame_data, traces=particle_trace_indices))
 
 fig.frames = animation_frames
 
 # ---------- Plot styling ----------
 fig.update_layout(
-    height=700,
+    height=820,
     margin=dict(l=0, r=0, t=20, b=20),
     paper_bgcolor="#F8FAFC",
     plot_bgcolor="#F8FAFC",
@@ -983,7 +1002,7 @@ const gd = document.getElementById('{plot_id}');
 let frameIndex = 0;
 let isPlaying = false;
 let timerId = null;
-const totalFrames = 24;
+const totalFrames = 120;
 function playCurrentFlow() {
   if (isPlaying) return;
   isPlaying = true;
@@ -995,12 +1014,12 @@ function playCurrentFlow() {
     if (!isPlaying) return;
     Plotly.animate(gd, [String(frameIndex)], {
       mode: 'immediate',
-      frame: {duration: 90, redraw: true},
+      frame: {duration: 45, redraw: true},
       transition: {duration: 0}
     }).then(() => {
       frameIndex = (frameIndex + 1) % totalFrames;
-      if (isPlaying) timerId = setTimeout(step, 35);
-    }).catch(() => { if (isPlaying) timerId = setTimeout(step, 100); });
+      if (isPlaying) timerId = setTimeout(step, 0);
+    }).catch(() => { if (isPlaying) timerId = setTimeout(step, 50); });
   };
   step();
 }
@@ -1019,7 +1038,7 @@ document.getElementById('gt-pause').addEventListener('click', pauseCurrentFlow);
 plot_html = fig.to_html(
     full_html=False,
     include_plotlyjs="cdn",
-    config={"displaylogo": False, "scrollZoom": True, "responsive": True, "staticPlot": False},
+    config={"displaylogo": False, "scrollZoom": True, "responsive": True},
     div_id=plot_id,
     post_script=post_script,
 )
@@ -1042,7 +1061,7 @@ controls_html = r"""
 """
 st.components.v1.html(
     f"<!doctype html><html><head><meta charset='utf-8'></head><body style='margin:0;background:#f8fafc'>{controls_html}{plot_html}</body></html>",
-    height=730,
+    height=850,
     scrolling=False,
 )
 # ---------- Monitoring panels ----------

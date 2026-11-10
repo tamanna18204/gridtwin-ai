@@ -1,5 +1,8 @@
 streamlit
 plotly
-scikit-learn
-pandas
 numpy
+pandas
+scikit-learn
+requests
+flask
+flask-cors
